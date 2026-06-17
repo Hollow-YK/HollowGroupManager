@@ -5,154 +5,110 @@ on:
     tags:
       - 'v*'
 
+permissions:
+  contents: write
+
 jobs:
   release:
     runs-on: ubuntu-latest
-    permissions:
-      contents: write
     steps:
       - name: Checkout
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      - name: Get version from tag
-        id: version
-        run: echo "VERSION=${GITHUB_REF_NAME#v}" >> $GITHUB_OUTPUT
-
-      - name: Generate release body
-        id: body
+      - name: Determine version info
+        id: meta
         run: |
-          VERSION="${{ steps.version.outputs.VERSION }}"
-          BODY=""
+          VERSION="${GITHUB_REF_NAME#v}"
+          echo "version=${VERSION}" >> $GITHUB_OUTPUT
 
-          # =============================================
-          # 1. 更新日志 — 从 history.txt 提取当前版本条目
-          # =============================================
-          BODY+="## 更新日志"$'\n\n'
+          # 预发布判定
+          if [[ "$VERSION" =~ alpha|beta|rc|dev|preview ]]; then
+            echo "prerelease=true" >> $GITHUB_OUTPUT
+          else
+            echo "prerelease=false" >> $GITHUB_OUTPUT
+          fi
 
-          awk -v ver="V${VERSION}" '
+      - name: Extract update log from history.txt
+        run: |
+          VERSION="V${{ steps.meta.outputs.version }}"
+
+          awk -v ver="${VERSION}" '
             $0 ~ "^" ver "[ (]" { found=1; next }
             found && /^V[0-9]/       { exit }
             found && /^---/          { next }
             found                    { sub(/^▸ /, "- "); print }
-          ' history.txt > /tmp/changelog_zh.txt
+          ' history.txt > /tmp/update_log.md
 
-          if [ -s /tmp/changelog_zh.txt ]; then
-            BODY+=$(cat /tmp/changelog_zh.txt)$'\n'
+          echo "Extracted update log:"
+          cat /tmp/update_log.md || echo "(empty)"
+
+      - name: Generate GitHub-style release notes
+        id: release_notes
+        run: |
+          PREV_TAG=$(git tag --sort=-v:refname | sed -n "/^v${{ steps.meta.outputs.version }}$/{n;p}")
+
+          if [ -n "$PREV_TAG" ]; then
+            PREV_TAG_PARAM="previous_tag_name=$PREV_TAG"
           else
-            BODY+="暂无更新日志"$'\n'
-          fi
-          BODY+=$'\n'
-
-          # =============================================
-          # 2. Change Log — 约定式提交 (Conventional Commits)
-          # =============================================
-          BODY+="## Change Log"$'\n\n'
-
-          # 查找上一个 tag，若无则用初始提交
-          PREV_TAG=$(git tag --sort=-v:refname | sed -n "/^v${VERSION}$/{n;p}")
-          if [ -z "$PREV_TAG" ]; then
-            PREV_TAG=$(git rev-list --max-parents=0 HEAD)
+            PREV_TAG_PARAM=""
           fi
 
-          # 提取约定式提交
-          git log "${PREV_TAG}..HEAD" --format="%s" --no-merges > /tmp/commits.txt
+          # 调用 GitHub API 生成 release notes（与 GitHub 自动生成一致）
+          RESPONSE=$(curl -s -X POST \
+            -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
+            -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/${{ github.repository }}/releases/generate-notes" \
+            -d "{\"tag_name\": \"${{ github.ref_name }}\", \"target_commitish\": \"main\", ${PREV_TAG_PARAM:+\"$PREV_TAG_PARAM\",} \"configuration_file_path\": \".github/release.yml\"}")
 
-          parse_commits() {
-            local type=$1
-            local heading=$2
-            grep -iE "^${type}(\([^)]*\))?: " /tmp/commits.txt 2>/dev/null | \
-              sed -E "s/^${type}(\(([^)]*)\))?: (.*)/- **\2**: \3/i" | \
-              sed -E 's/^\*\* \*\*: //' | \
-              sed -E 's/^- \*\*([^*]+)\*\*: /- **\1**: /'
-          }
+          echo "$RESPONSE" > /tmp/api_response.json
+          BODY=$(echo "$RESPONSE" | jq -r '.body // empty')
 
-          has_content() {
-            grep -iE "^$1(\([^)]*\))?: " /tmp/commits.txt 2>/dev/null > /dev/null
-          }
+          if [ -z "$BODY" ] || [ "$BODY" = "null" ]; then
+            echo "GitHub API failed, falling back to git log"
+            # Fallback: 手动生成变更列表
+            echo "## What's Changed" > /tmp/generated_notes.md
+            echo "" >> /tmp/generated_notes.md
+            if [ -n "$PREV_TAG" ]; then
+              git log "${PREV_TAG}..HEAD" --format="- %s" --no-merges >> /tmp/generated_notes.md
+            else
+              git log --format="- %s" --no-merges >> /tmp/generated_notes.md
+            fi
 
-          if has_content "feat"; then
-            BODY+="### Features"$'\n\n'
-            BODY+=$(parse_commits "feat" "### Features")$'\n\n'
-          fi
+            echo "" >> /tmp/generated_notes.md
+            echo "## New Contributors" >> /tmp/generated_notes.md
+            echo "" >> /tmp/generated_notes.md
 
-          if has_content "fix"; then
-            BODY+="### Bug Fixes"$'\n\n'
-            BODY+=$(parse_commits "fix" "### Bug Fixes")$'\n\n'
-          fi
-
-          if has_content "perf"; then
-            BODY+="### Performance Improvements"$'\n\n'
-            BODY+=$(parse_commits "perf" "### Performance Improvements")$'\n\n'
-          fi
-
-          if has_content "refactor"; then
-            BODY+="### Refactoring"$'\n\n'
-            BODY+=$(parse_commits "refactor" "### Refactoring")$'\n\n'
-          fi
-
-          if has_content "docs"; then
-            BODY+="### Documentation"$'\n\n'
-            BODY+=$(parse_commits "docs" "### Documentation")$'\n\n'
-          fi
-
-          if has_content "style"; then
-            BODY+="### Styles"$'\n\n'
-            BODY+=$(parse_commits "style" "### Styles")$'\n\n'
-          fi
-
-          if has_content "test"; then
-            BODY+="### Tests"$'\n\n'
-            BODY+=$(parse_commits "test" "### Tests")$'\n\n'
-          fi
-
-          if has_content "chore"; then
-            BODY+="### Chores"$'\n\n'
-            BODY+=$(parse_commits "chore" "### Chores")$'\n\n'
-          fi
-
-          if has_content "ci"; then
-            BODY+="### CI/CD"$'\n\n'
-            BODY+=$(parse_commits "ci" "### CI/CD")$'\n\n'
-          fi
-
-          if has_content "build"; then
-            BODY+="### Build System"$'\n\n'
-            BODY+=$(parse_commits "build" "### Build System")$'\n\n'
-          fi
-
-          # 其他有内容的提交（非 merge、非约定式前缀）
-          OTHER=$(grep -viE "^(feat|fix|perf|refactor|docs|style|test|chore|ci|build)(\([^)]*\))?: " /tmp/commits.txt 2>/dev/null | sed 's/^/- /')
-          if [ -n "$OTHER" ]; then
-            BODY+="### Other"$'\n\n'
-            BODY+="$OTHER"$'\n\n'
-          fi
-
-          if ! grep -qiE "^(feat|fix|perf|refactor|docs|style|test|chore|ci|build)" /tmp/commits.txt 2>/dev/null && [ -z "$OTHER" ]; then
-            BODY+="暂无约定式提交记录"$'\n\n'
-          fi
-
-          # =============================================
-          # 3. 贡献者列表
-          # =============================================
-          BODY+="## 贡献者"$'\n\n'
-
-          AUTHORS=$(git log "${PREV_TAG}..HEAD" --format="%an" --no-merges | sort -u)
-          if [ -n "$AUTHORS" ]; then
-            while IFS= read -r name; do
-              BODY+="- ${name}"$'\n'
-            done <<< "$AUTHORS"
+            if [ -n "$PREV_TAG" ]; then
+              git log "${PREV_TAG}..HEAD" --format="%an" --no-merges | sort -u | sed 's/^/- @/' >> /tmp/generated_notes.md
+            else
+              git log --format="%an" --no-merges | sort -u | sed 's/^/- @/' >> /tmp/generated_notes.md
+            fi
           else
-            BODY+="无"$'\n'
+            echo "$BODY" > /tmp/generated_notes.md
           fi
 
-          # 写入 output
+          echo "Generated release notes:"
+          cat /tmp/generated_notes.md
+
+      - name: Compose final release body
+        run: |
+          # 更新日志 + GitHub 风格 release notes
           {
-            echo "BODY<<EOF"
-            echo "$BODY"
-            echo "EOF"
-          } >> $GITHUB_OUTPUT
+            if [ -s /tmp/update_log.md ]; then
+              echo "## 更新日志"
+              echo ""
+              cat /tmp/update_log.md
+              echo ""
+              echo "---"
+              echo ""
+            fi
+            cat /tmp/generated_notes.md
+          } > /tmp/release_body.md
+
+          echo "Final release body:"
+          cat /tmp/release_body.md
 
       - name: Create release archive
         run: |
@@ -163,11 +119,12 @@ jobs:
           cp desc.txt        dist/多群管理Bot/
           cp config.properties dist/多群管理Bot/
           cd dist
-          zip -r "../HollowGroupManager_QF-${{ steps.version.outputs.VERSION }}.zip" 多群管理Bot
+          zip -r "../HollowGroupManager_QF-${{ steps.meta.outputs.version }}.zip" 多群管理Bot
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          name: V${{ steps.version.outputs.VERSION }}
-          body: ${{ steps.body.outputs.BODY }}
-          files: HollowGroupManager_QF-${{ steps.version.outputs.VERSION }}.zip
+          name: V${{ steps.meta.outputs.version }}
+          body_path: /tmp/release_body.md
+          files: HollowGroupManager_QF-${{ steps.meta.outputs.version }}.zip
+          prerelease: ${{ steps.meta.outputs.prerelease }}
