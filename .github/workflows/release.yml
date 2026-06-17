@@ -8,13 +8,151 @@ on:
 jobs:
   release:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Get version from tag
         id: version
         run: echo "VERSION=${GITHUB_REF_NAME#v}" >> $GITHUB_OUTPUT
+
+      - name: Generate release body
+        id: body
+        run: |
+          VERSION="${{ steps.version.outputs.VERSION }}"
+          BODY=""
+
+          # =============================================
+          # 1. 更新日志 — 从 history.txt 提取当前版本条目
+          # =============================================
+          BODY+="## 更新日志"$'\n\n'
+
+          awk -v ver="V${VERSION}" '
+            $0 ~ "^" ver "[ (]" { found=1; next }
+            found && /^V[0-9]/       { exit }
+            found && /^---/          { next }
+            found                    { sub(/^▸ /, "- "); print }
+          ' history.txt > /tmp/changelog_zh.txt
+
+          if [ -s /tmp/changelog_zh.txt ]; then
+            BODY+=$(cat /tmp/changelog_zh.txt)$'\n'
+          else
+            BODY+="暂无更新日志"$'\n'
+          fi
+          BODY+=$'\n'
+
+          # =============================================
+          # 2. Change Log — 约定式提交 (Conventional Commits)
+          # =============================================
+          BODY+="## Change Log"$'\n\n'
+
+          # 查找上一个 tag，若无则用初始提交
+          PREV_TAG=$(git tag --sort=-v:refname | sed -n "/^v${VERSION}$/{n;p}")
+          if [ -z "$PREV_TAG" ]; then
+            PREV_TAG=$(git rev-list --max-parents=0 HEAD)
+          fi
+
+          # 提取约定式提交
+          git log "${PREV_TAG}..HEAD" --format="%s" --no-merges > /tmp/commits.txt
+
+          parse_commits() {
+            local type=$1
+            local heading=$2
+            grep -iE "^${type}(\([^)]*\))?: " /tmp/commits.txt 2>/dev/null | \
+              sed -E "s/^${type}(\(([^)]*)\))?: (.*)/- **\2**: \3/i" | \
+              sed -E 's/^\*\* \*\*: //' | \
+              sed -E 's/^- \*\*([^*]+)\*\*: /- **\1**: /'
+          }
+
+          has_content() {
+            grep -iE "^$1(\([^)]*\))?: " /tmp/commits.txt 2>/dev/null > /dev/null
+          }
+
+          if has_content "feat"; then
+            BODY+="### Features"$'\n\n'
+            BODY+=$(parse_commits "feat" "### Features")$'\n\n'
+          fi
+
+          if has_content "fix"; then
+            BODY+="### Bug Fixes"$'\n\n'
+            BODY+=$(parse_commits "fix" "### Bug Fixes")$'\n\n'
+          fi
+
+          if has_content "perf"; then
+            BODY+="### Performance Improvements"$'\n\n'
+            BODY+=$(parse_commits "perf" "### Performance Improvements")$'\n\n'
+          fi
+
+          if has_content "refactor"; then
+            BODY+="### Refactoring"$'\n\n'
+            BODY+=$(parse_commits "refactor" "### Refactoring")$'\n\n'
+          fi
+
+          if has_content "docs"; then
+            BODY+="### Documentation"$'\n\n'
+            BODY+=$(parse_commits "docs" "### Documentation")$'\n\n'
+          fi
+
+          if has_content "style"; then
+            BODY+="### Styles"$'\n\n'
+            BODY+=$(parse_commits "style" "### Styles")$'\n\n'
+          fi
+
+          if has_content "test"; then
+            BODY+="### Tests"$'\n\n'
+            BODY+=$(parse_commits "test" "### Tests")$'\n\n'
+          fi
+
+          if has_content "chore"; then
+            BODY+="### Chores"$'\n\n'
+            BODY+=$(parse_commits "chore" "### Chores")$'\n\n'
+          fi
+
+          if has_content "ci"; then
+            BODY+="### CI/CD"$'\n\n'
+            BODY+=$(parse_commits "ci" "### CI/CD")$'\n\n'
+          fi
+
+          if has_content "build"; then
+            BODY+="### Build System"$'\n\n'
+            BODY+=$(parse_commits "build" "### Build System")$'\n\n'
+          fi
+
+          # 其他有内容的提交（非 merge、非约定式前缀）
+          OTHER=$(grep -viE "^(feat|fix|perf|refactor|docs|style|test|chore|ci|build)(\([^)]*\))?: " /tmp/commits.txt 2>/dev/null | sed 's/^/- /')
+          if [ -n "$OTHER" ]; then
+            BODY+="### Other"$'\n\n'
+            BODY+="$OTHER"$'\n\n'
+          fi
+
+          if ! grep -qiE "^(feat|fix|perf|refactor|docs|style|test|chore|ci|build)" /tmp/commits.txt 2>/dev/null && [ -z "$OTHER" ]; then
+            BODY+="暂无约定式提交记录"$'\n\n'
+          fi
+
+          # =============================================
+          # 3. 贡献者列表
+          # =============================================
+          BODY+="## 贡献者"$'\n\n'
+
+          AUTHORS=$(git log "${PREV_TAG}..HEAD" --format="%an" --no-merges | sort -u)
+          if [ -n "$AUTHORS" ]; then
+            while IFS= read -r name; do
+              BODY+="- ${name}"$'\n'
+            done <<< "$AUTHORS"
+          else
+            BODY+="无"$'\n'
+          fi
+
+          # 写入 output
+          {
+            echo "BODY<<EOF"
+            echo "$BODY"
+            echo "EOF"
+          } >> $GITHUB_OUTPUT
 
       - name: Create release archive
         run: |
@@ -30,6 +168,6 @@ jobs:
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          name: HollowGroupManager QF v${{ steps.version.outputs.VERSION }}
-          body: 详见 [history.txt](${{ github.server_url }}/${{ github.repository }}/blob/main/history.txt)
+          name: V${{ steps.version.outputs.VERSION }}
+          body: ${{ steps.body.outputs.BODY }}
           files: HollowGroupManager_QF-${{ steps.version.outputs.VERSION }}.zip
