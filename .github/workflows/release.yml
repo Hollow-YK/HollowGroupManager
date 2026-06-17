@@ -1,0 +1,35 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Get version from tag
+        id: version
+        run: echo "VERSION=${GITHUB_REF_NAME#v}" >> $GITHUB_OUTPUT
+
+      - name: Create release archive
+        run: |
+          mkdir -p dist/多群管理Bot
+          cp main.java       dist/多群管理Bot/
+          cp info.prop       dist/多群管理Bot/
+          cp README.md       dist/多群管理Bot/
+          cp desc.txt        dist/多群管理Bot/
+          cp config.properties dist/多群管理Bot/
+          cd dist
+          zip -r "../HollowGroupManager_QF-${{ steps.version.outputs.VERSION }}.zip" 多群管理Bot
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: HollowGroupManager QF v${{ steps.version.outputs.VERSION }}
+          body: 详见 [history.txt](${{ github.server_url }}/${{ github.repository }}/blob/main/history.txt)
+          files: HollowGroupManager_QF-${{ steps.version.outputs.VERSION }}.zip

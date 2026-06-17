@@ -1,0 +1,34 @@
+{
+  // ===== Java — 本项目 .java 是 QFun BeanShell 脚本，彻底禁用 Java 语言服务 =====
+  "java.validate.enabled": false,
+  "java.autobuild.enabled": false,
+  "java.compile.nullAnalysis.mode": "disabled",
+  "java.errors.incompleteClasspath.severity": "ignore",
+  "java.server.launchMode": "LightWeight",
+  "java.semanticHighlighting.enabled": false,
+  "java.import.gradle.enabled": false,
+  "java.import.maven.enabled": false,
+  "java.project.importOnFirstTimeStartup": "disabled",
+  "java.project.sourcePaths": [],
+  "java.project.referencedLibraries": [],
+  "java.contentProviderPreferred": null,
+  "java.trace.server": "off",
+  "java.import.generatesMetadataFilesAtProjectRoot": false,
+
+  // ===== 编辑器通用 =====
+  "editor.showUnused": false,
+  "problems.decorations.enabled": false,
+
+  // ===== Markdown =====
+  "markdownlint.run": "onSave",
+  "markdownlint.files": {
+    "**/*.md": true,
+    "**/*.markdown": true
+  },
+
+  // ===== 文件关联 =====
+  "files.associations": {
+    "*.java": "plaintext",
+    "**/*.java": "plaintext"
+  }
+}
