@@ -600,15 +600,41 @@ void cmdPunish(int level, String sender, String group, String[] parts, Object ms
     // 创建记录
     Record r = createRecord(sender, group, Long.parseLong(targetQQ), method, content, reason, "执行中");
 
-    // 遍历执行群
+    // 遍历执行群（三步检查：成员在群 → 状态检查 → 执行）
     List<String> execGroups = new ArrayList<>(mg.executionGroups);
-    boolean allSuccess = true;
+    boolean anySuccess = false;
     boolean anyFail = false;
     List<String> failGroups = new ArrayList<>();
     for (String gid : execGroups) {
-        // 检查成员是否在群
-        Object member = getMemberInfo(gid, targetQQ);
-        if (member == null) continue; // 跳过
+        // 第一步：检查确认成员在群内（不在则跳过，不视为失败）
+        // 使用 getGroupMemberList 遍历比对 uin，比 getMemberInfo 更可靠
+        boolean memberInGroup = false;
+        List groupMembers = getGroupMemberList(gid);
+        if (groupMembers != null) {
+            for (Object m : groupMembers) {
+                if (m.uin != null && m.uin.equals(targetQQ)) {
+                    memberInGroup = true;
+                    break;
+                }
+            }
+        }
+        if (!memberInGroup) continue;
+
+        // 第二步：操作前状态检查
+        if (method.equals("mute")) {
+            // 检查成员是否已被禁言（仍执行以更新时长，仅记录提示）
+            List prohibitList = getProhibitList(gid);
+            if (prohibitList != null) {
+                for (Object p : prohibitList) {
+                    if (p.user.equals(targetQQ)) {
+                        notifyAdminGroup(mg, "[提示] 处罚「" + r.id + "」在群" + gid + "成员" + targetQQ + "已被禁言，将更新禁言时长。");
+                        break;
+                    }
+                }
+            }
+        }
+
+        // 第三步：执行处罚操作并通报
         try {
             switch (method) {
                 case "kick":
@@ -616,44 +642,54 @@ void cmdPunish(int level, String sender, String group, String[] parts, Object ms
                     kickGroup(gid, targetQQ, false);
                     if (toBlack) {
                         addToBlacklist(Long.parseLong(targetQQ), reason, mg.name);
+                        sendGroupMsg(gid, "[atUin=" + targetQQ + "] 因「" + reason + "」被踢出并加入黑名单。");
+                    } else {
+                        sendGroupMsg(gid, "[atUin=" + targetQQ + "] 因「" + reason + "」被踢出。");
                     }
                     break;
                 case "mute":
                     long sec = parseDurationSeconds(content);
                     shutUp(gid, targetQQ, sec);
+                    sendGroupMsg(gid, "[atUin=" + targetQQ + "] 因「" + reason + "」被禁言 " + content + "。");
                     break;
                 case "warning":
-                    // 无实际操作
+                    // 警告无实际操作，仅通报
+                    sendGroupMsg(gid, "[atUin=" + targetQQ + "] 因「" + reason + "」被警告。");
                     break;
             }
+            anySuccess = true;
         } catch (Exception e) {
-            allSuccess = false;
             anyFail = true;
             failGroups.add(gid);
-            notifyAdminGroup(mg, "[异常] 处罚（" + r.id + "）在群（" + gid + "）执行失败：权限不足。");
+            notifyAdminGroup(mg, "[异常] 处罚「" + r.id + "」在群" + gid + "执行失败：" + e.getMessage());
         }
     }
 
     // 更新状态
-    if (anyFail) {
+    if (anyFail && !anySuccess) {
         r.status = "执行失败";
         r.failDetail = "失败群：" + String.join(",", failGroups);
+    } else if (anyFail) {
+        r.status = "执行失败";
+        r.failDetail = "部分失败，失败群：" + String.join(",", failGroups);
     } else {
         r.status = "已执行";
     }
     updateRecord(r);
 
-    // 发送总结
+    // 发送总结（仅报告失败，跳过不视为失败）
     StringBuilder feedback = new StringBuilder();
-    if (allSuccess) {
-        feedback.append("处罚已对所有执行群生效。");
+    if (anyFail && !anySuccess) {
+        feedback.append("处罚执行失败，失败群：" + String.join(",", failGroups));
+    } else if (anyFail) {
+        feedback.append("处罚部分执行失败，失败群：" + String.join(",", failGroups));
     } else {
-        feedback.append("处罚部分执行：成功群 " + (execGroups.size() - failGroups.size()) + " 个，失败群：" + String.join(",", failGroups));
+        feedback.append("处罚已执行。");
     }
     sendGroupMsg(group, feedback.toString());
 
     // 通知管理群
-    notifyAdminGroup(mg, "处罚（" + r.id + "）：（" + sender + "）在（" + group + "）内发起了对（" + targetQQ + "）的（" + r.describe() + "）处罚，原因：（" + reason + "）");
+    notifyAdminGroup(mg, "处罚「" + r.id + "」：" + sender + "在" + group + "内发起了对" + targetQQ + "的「" + r.describe() + "」处罚，原因：「" + reason + "」");
 
     saveAll();
 }
@@ -938,20 +974,71 @@ void cmdRevoke(int level, String sender, String group, String[] parts) {
         return;
     }
 
-    // 执行撤销动作
-    try {
-        if (target.method.equals("mute")) {
-            for (String gid : mg.executionGroups) {
-                shutUp(gid, String.valueOf(target.target), 0); // 解禁
+    // 执行撤销动作（三步检查：成员在群 → 处于禁言状态 → 执行解禁）
+    boolean anyRevoked = false;
+    List<String> revokeSkipGroups = new ArrayList<>();
+    List<String> revokeFailGroups = new ArrayList<>();
+
+    if (target.method.equals("mute")) {
+        for (String gid : mg.executionGroups) {
+            try {
+                // 第一步：检查确认成员在群内
+                // 使用 getGroupMemberList 遍历比对 uin，比 getMemberInfo 更可靠
+                boolean memberInGroup = false;
+                List groupMembers = getGroupMemberList(gid);
+                if (groupMembers != null) {
+                    for (Object m : groupMembers) {
+                        if (m.uin != null && m.uin.equals(String.valueOf(target.target))) {
+                            memberInGroup = true;
+                            break;
+                        }
+                    }
+                }
+                if (!memberInGroup) {
+                    revokeSkipGroups.add(gid + "(成员不存在)");
+                    continue;
+                }
+
+                // 第二步：检查成员处于被禁言状态
+                boolean isMuted = false;
+                List prohibitList = getProhibitList(gid);
+                if (prohibitList != null) {
+                    for (Object p : prohibitList) {
+                        if (p.user.equals(String.valueOf(target.target))) {
+                            isMuted = true;
+                            break;
+                        }
+                    }
+                }
+                if (!isMuted) {
+                    revokeSkipGroups.add(gid + "(未处于禁言状态)");
+                    continue;
+                }
+
+                // 第三步：执行取消禁言
+                shutUp(gid, String.valueOf(target.target), 0);
+                anyRevoked = true;
+            } catch (Exception e) {
+                revokeFailGroups.add(gid);
+                notifyAdminGroup(mg, "[异常] 撤销（" + target.id + "）在群（" + gid + "）执行失败：" + e.getMessage());
             }
-        } else if (target.method.equals("kick") && "f".equals(target.content)) {
-            removeFromBlacklist(target.target, mg.name);
         }
-        // warning 和 kick 非 f 无操作
-    } catch (Exception e) {
-        sendGroupMsg(group, "撤销操作执行失败：" + e.getMessage());
-        return;
+
+        // 没有任何群成功解禁
+        if (!anyRevoked && !revokeFailGroups.isEmpty()) {
+            sendGroupMsg(group, "撤销操作执行失败，失败群：" + String.join(",", revokeFailGroups));
+            return;
+        }
+    } else if (target.method.equals("kick") && "f".equals(target.content)) {
+        try {
+            removeFromBlacklist(target.target, mg.name);
+            anyRevoked = true;
+        } catch (Exception e) {
+            sendGroupMsg(group, "撤销操作执行失败：" + e.getMessage());
+            return;
+        }
     }
+    // warning 和 kick 非 f 无操作
 
     target.status = "已撤销";
     target.revokeTime = System.currentTimeMillis() / 1000;
@@ -959,7 +1046,11 @@ void cmdRevoke(int level, String sender, String group, String[] parts) {
     updateRecord(target);
     saveAll();
 
-    sendGroupMsg(group, "记录 " + recordId + " 已撤销");
+    String revokeMsg = "记录 " + recordId + " 已撤销";
+    if (!revokeSkipGroups.isEmpty()) {
+        revokeMsg += "（以下群跳过：" + String.join(", ", revokeSkipGroups) + "）";
+    }
+    sendGroupMsg(group, revokeMsg);
     notifyAdminGroup(mg, "[撤销] 处罚（" + target.id + "）已被（" + sender + "）撤销，原处罚：（" + target.target + "）的（" + target.describe() + "），原因：（" + target.reason + "）。撤销原因：" + (revokeReason.isEmpty() ? "无" : revokeReason));
 }
 
@@ -973,6 +1064,22 @@ void joinGroup(String group, String qq) {
     for (BlacklistItem b : blacklist) {
         if (b.qq == Long.parseLong(qq) && b.groupName.equals(mg.name)) {
             try {
+                // 检查成员是否仍在群内
+                // 使用 getGroupMemberList 遍历比对 uin，比 getMemberInfo 更可靠
+                boolean memberInGroup = false;
+                List groupMembers = getGroupMemberList(group);
+                if (groupMembers != null) {
+                    for (Object m : groupMembers) {
+                        if (m.uin != null && m.uin.equals(qq)) {
+                            memberInGroup = true;
+                            break;
+                        }
+                    }
+                }
+                if (!memberInGroup) {
+                    log("info.log", "黑名单成员 " + qq + " 在群（" + group + "）中已不存在，跳过踢出。");
+                    break;
+                }
                 kickGroup(group, qq, false);
                 sendGroupMsg(group, "用户 " + qq + " 在管理组黑名单中，已自动移出。原因：" + b.reason);
             } catch (Exception e) {
