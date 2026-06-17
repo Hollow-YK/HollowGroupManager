@@ -3,6 +3,11 @@ import java.util.*;
 import java.text.SimpleDateFormat;
 import java.util.regex.*;
 import java.util.concurrent.atomic.AtomicInteger;
+import android.graphics.Bitmap;
+import android.graphics.Canvas;
+import android.graphics.Color;
+import android.graphics.Paint;
+import android.graphics.Typeface;
 
 // ==================== 全局数据与配置 ====================
 List<String> wakeWords;
@@ -10,10 +15,10 @@ Set<String> superAdmins;
 String dataDirPath;
 
 Map<String, ManagementGroup> groups = new LinkedHashMap<>();
-List<Record> records = Collections.synchronizedList(new ArrayList<>());
+List<PunishRecord> records = Collections.synchronizedList(new ArrayList<>());
 Map<String, Integer> permissions = new HashMap<>();          // qq -> level (1 或 -1)
 List<BlacklistItem> blacklist = Collections.synchronizedList(new ArrayList<>());
-AtomicInteger nextRecordId = new AtomicInteger(1);
+AtomicInteger nextPunishRecordId = new AtomicInteger(1);
 
 boolean initialized = false;
 final Object initLock = new Object();
@@ -44,7 +49,7 @@ class ManagementGroup {
     }
 }
 
-class Record {
+class PunishRecord {
     int id;
     long sender;
     long time;
@@ -75,29 +80,31 @@ class Record {
         return map;
     }
 
-    static Record fromMap(Map<String, Object> map) {
-        Record r = new Record();
-        r.id = ((Number) map.get("id")).intValue();
-        r.sender = ((Number) map.get("sender")).longValue();
-        r.time = ((Number) map.get("time")).longValue();
-        r.fromGroup = (String) map.get("fromGroup");
-        r.target = ((Number) map.get("target")).longValue();
-        r.method = (String) map.get("method");
-        r.content = (String) map.get("content");
-        r.reason = (String) map.get("reason");
-        r.status = (String) map.get("status");
-        r.failDetail = (String) map.get("failDetail");
-        r.revokeTime = ((Number) map.get("revokeTime")).longValue();
-        r.revokeReason = (String) map.get("revokeReason");
+    static PunishRecord fromMap(Map<String, Object> map) {
+        PunishRecord r = new PunishRecord();
+        // 使用 String.valueOf + Long.parseLong 避免 BeanShell bsh.Primitive 类型转换问题
+        r.id = Integer.parseInt(String.valueOf(map.get("id")));
+        r.sender = Long.parseLong(String.valueOf(map.get("sender")));
+        r.time = Long.parseLong(String.valueOf(map.get("time")));
+        r.fromGroup = map.get("fromGroup") != null ? map.get("fromGroup").toString() : "";
+        r.target = Long.parseLong(String.valueOf(map.get("target")));
+        r.method = map.get("method") != null ? map.get("method").toString() : "";
+        r.content = map.get("content") != null ? map.get("content").toString() : "";
+        r.reason = map.get("reason") != null ? map.get("reason").toString() : "";
+        r.status = map.get("status") != null ? map.get("status").toString() : "";
+        r.failDetail = map.get("failDetail") != null ? map.get("failDetail").toString() : "";
+        r.revokeTime = Long.parseLong(String.valueOf(map.get("revokeTime")));
+        r.revokeReason = map.get("revokeReason") != null ? map.get("revokeReason").toString() : "";
         return r;
     }
 
     String describe() {
+        String c = content != null ? content : "";
         switch (method) {
-            case "kick": return "kick" + (content.equals("f") ? " f" : "");
-            case "mute": return "mute " + content;
+            case "kick": return "kick" + (c.equals("f") ? " f" : "");
+            case "mute": return "mute " + c;
             case "warning": return "warning";
-            default: return method;
+            default: return method != null ? method : "";
         }
     }
 }
@@ -119,10 +126,10 @@ class BlacklistItem {
 
     static BlacklistItem fromMap(Map<String, Object> map) {
         BlacklistItem b = new BlacklistItem();
-        b.qq = ((Number) map.get("qq")).longValue();
-        b.reason = (String) map.get("reason");
-        b.addTime = ((Number) map.get("addTime")).longValue();
-        b.groupName = (String) map.get("groupName");
+        b.qq = Long.parseLong(String.valueOf(map.get("qq")));
+        b.reason = map.get("reason") != null ? map.get("reason").toString() : "";
+        b.addTime = Long.parseLong(String.valueOf(map.get("addTime")));
+        b.groupName = map.get("groupName") != null ? map.get("groupName").toString() : "";
         return b;
     }
 }
@@ -151,21 +158,21 @@ void init() {
 
     // 加载数据
     groups = loadMap(dataDirPath + "/groups.json", ManagementGroup::fromMap);
-    records = Collections.synchronizedList(loadList(dataDirPath + "/records.json", Record::fromMap));
+    records = Collections.synchronizedList(loadList(dataDirPath + "/records.json", PunishRecord::fromMap));
     permissions = loadSimpleMap(dataDirPath + "/permissions.json");
     blacklist = Collections.synchronizedList(loadList(dataDirPath + "/blacklist.json", BlacklistItem::fromMap));
 
     // 计算下一个记录ID
     int maxId = 0;
-    for (Record r : records) {
+    for (PunishRecord r : records) {
         if (r.id > maxId) maxId = r.id;
     }
-    nextRecordId.set(maxId + 1);
+    nextPunishRecordId.set(maxId + 1);
 }
 
 // 序列化工具
 void saveAll() {
-    saveList(dataDirPath + "/records.json", records, Record::toMap);
+    saveList(dataDirPath + "/records.json", records, PunishRecord::toMap);
     saveMap(dataDirPath + "/groups.json", groups, ManagementGroup::toMap);
     saveSimpleMap(dataDirPath + "/permissions.json", permissions);
     saveList(dataDirPath + "/blacklist.json", blacklist, BlacklistItem::toMap);
@@ -576,7 +583,7 @@ void cmdPunish(int level, String sender, String group, String[] parts, Object ms
 
     if (reasonStart >= parts.length) {
         // 缺少原因
-        Record r = createRecord(sender, group, Long.parseLong(targetQQ), method, content, "", "不合规");
+        PunishRecord r = createPunishRecord(sender, group, Long.parseLong(targetQQ), method, content, "", "不合规");
         notifyAdminGroup(findGroupByGroupId(group), "[不合规] 处罚（" + r.id + "）：发起者（" + sender + "）在群（" + group + "）发起的处罚缺少原因，未执行。");
         sendGroupMsg(group, "原因缺失，记录已生成为[不合规]，未执行处罚。");
         saveAll();
@@ -598,7 +605,7 @@ void cmdPunish(int level, String sender, String group, String[] parts, Object ms
     }
 
     // 创建记录
-    Record r = createRecord(sender, group, Long.parseLong(targetQQ), method, content, reason, "执行中");
+    PunishRecord r = createPunishRecord(sender, group, Long.parseLong(targetQQ), method, content, reason, "执行中");
 
     // 遍历执行群（三步检查：成员在群 → 状态检查 → 执行）
     List<String> execGroups = new ArrayList<>(mg.executionGroups);
@@ -675,7 +682,7 @@ void cmdPunish(int level, String sender, String group, String[] parts, Object ms
     } else {
         r.status = "已执行";
     }
-    updateRecord(r);
+    updatePunishRecord(r);
 
     // 发送总结（仅报告失败，跳过不视为失败）
     StringBuilder feedback = new StringBuilder();
@@ -694,9 +701,9 @@ void cmdPunish(int level, String sender, String group, String[] parts, Object ms
     saveAll();
 }
 
-Record createRecord(String sender, String fromGroup, long target, String method, String content, String reason, String status) {
-    Record r = new Record();
-    r.id = nextRecordId.getAndIncrement();
+PunishRecord createPunishRecord(String sender, String fromGroup, long target, String method, String content, String reason, String status) {
+    PunishRecord r = new PunishRecord();
+    r.id = nextPunishRecordId.getAndIncrement();
     r.sender = Long.parseLong(sender);
     r.time = System.currentTimeMillis() / 1000;
     r.fromGroup = fromGroup;
@@ -705,11 +712,13 @@ Record createRecord(String sender, String fromGroup, long target, String method,
     r.content = content;
     r.reason = reason;
     r.status = status;
+    r.failDetail = "";
+    r.revokeReason = "";
     records.add(r);
     return r;
 }
 
-void updateRecord(Record r) {
+void updatePunishRecord(PunishRecord r) {
     // 已经在列表中，无需操作，保存时会同步
 }
 
@@ -750,8 +759,8 @@ void cmdQuery(int level, String group, String[] parts) {
         return;
     }
 
-    List<Record> filtered = new ArrayList<>();
-    for (Record r : records) {
+    List<PunishRecord> filtered = new ArrayList<>();
+    for (PunishRecord r : records) {
         if (r.target == target && (r.fromGroup.equals(group) || mg.executionGroups.contains(r.fromGroup) || mg.adminGroup.equals(r.fromGroup))) {
             // 组内共享记录
             filtered.add(r);
@@ -759,14 +768,13 @@ void cmdQuery(int level, String group, String[] parts) {
     }
 
     if (detail) {
-        // 生成表格
-        String table = buildRecordTable(filtered);
-        sendGroupMsg(group, table);
+        // 生成表格图片发送
+        sendPunishRecordTableImage(group, filtered);
     } else {
         // 汇总统计（仅已执行和执行失败）
         int totalPunish = 0, muteCount = 0, kickCount = 0;
         long muteTotalSec = 0;
-        for (Record r : filtered) {
+        for (PunishRecord r : filtered) {
             if (r.status.equals("已执行") || r.status.equals("执行失败")) {
                 totalPunish++;
                 if (r.method.equals("mute")) {
@@ -794,22 +802,154 @@ void cmdQuery(int level, String group, String[] parts) {
     }
 }
 
-String buildRecordTable(List<Record> list) {
+// ==================== 记录表格图片生成 ====================
+void sendPunishRecordTableImage(String group, List<PunishRecord> list) {
+    if (list.isEmpty()) {
+        sendGroupMsg(group, "无记录");
+        return;
+    }
+    try {
+        String path = pluginPath + "/record_table_" + group + "_" + System.currentTimeMillis() + ".png";
+        generatePunishRecordTableImage(list, path);
+        sendPic(group, path, 2);
+        new File(path).delete();
+    } catch (Exception e) {
+        // 图片生成失败时回退到文字表格
+        sendGroupMsg(group, buildPunishRecordTable(list));
+    }
+}
+
+void generatePunishRecordTableImage(List<PunishRecord> list, String outputPath) throws IOException {
+    SimpleDateFormat fmt = new SimpleDateFormat("MM-dd HH:mm");
+
+    // 列定义：标签与宽度
+    String[] headers = {"ID", "时间", "发起群", "发起者", "方式", "内容", "原因", "状态", "撤销时间", "撤销原因"};
+    int[] colWidths = {50, 120, 110, 110, 55, 70, 140, 70, 120, 140};
+    int[] colX = new int[colWidths.length];
+    int x = 16;
+    for (int i = 0; i < colWidths.length; i++) {
+        colX[i] = x;
+        x += colWidths[i] + 12;
+    }
+    int imgWidth = x + 16;
+
+    int rowHeight = 42;
+    int headerY = 68;
+    int headerH = 46;
+    int imgHeight = headerY + headerH + list.size() * rowHeight + 30;
+
+    Bitmap bitmap = Bitmap.createBitmap(imgWidth, imgHeight, Bitmap.Config.ARGB_8888);
+    Canvas canvas = new Canvas(bitmap);
+    Paint paint = new Paint();
+    paint.setAntiAlias(true);
+    canvas.drawColor(Color.WHITE);
+
+    // 标题
+    paint.setColor(Color.parseColor("#1A237E"));
+    paint.setTypeface(Typeface.DEFAULT_BOLD);
+    paint.setTextSize(30);
+    canvas.drawText("处罚记录列表  (" + list.size() + "条)", 20, 44, paint);
+
+    // 表头背景
+    paint.setColor(Color.parseColor("#3F51B5"));
+    canvas.drawRoundRect(12, headerY - 4, imgWidth - 12, headerY + headerH - 10, 10, 10, paint);
+
+    // 表头文字
+    paint.setColor(Color.WHITE);
+    paint.setTypeface(Typeface.DEFAULT_BOLD);
+    paint.setTextSize(20);
+    for (int i = 0; i < headers.length; i++) {
+        canvas.drawText(headers[i], colX[i], headerY + 28, paint);
+    }
+
+    // 数据行
+    paint.setTypeface(Typeface.DEFAULT);
+    paint.setTextSize(17);
+    for (int i = 0; i < list.size(); i++) {
+        PunishRecord r = list.get(i);
+        int rowY = headerY + headerH + i * rowHeight;
+
+        // 交替行背景
+        if (i % 2 == 0) {
+            paint.setColor(Color.parseColor("#F5F7FF"));
+        } else {
+            paint.setColor(Color.WHITE);
+        }
+        canvas.drawRect(12, rowY, imgWidth - 12, rowY + rowHeight, paint);
+
+        // 行分隔线
+        paint.setColor(Color.parseColor("#E0E0E0"));
+        canvas.drawLine(12, rowY + rowHeight, imgWidth - 12, rowY + rowHeight, paint);
+
+        // 状态颜色（null 安全）
+        String st = r.status != null ? r.status : "";
+        int statusColor = Color.BLACK;
+        if (st.equals("已执行")) statusColor = Color.parseColor("#2E7D32");
+        else if (st.equals("已撤销")) statusColor = Color.parseColor("#F57F17");
+        else if (st.equals("执行失败")) statusColor = Color.parseColor("#C62828");
+        else if (st.equals("不合规")) statusColor = Color.parseColor("#757575");
+
+        String c = (r.content != null && !r.content.isEmpty()) ? r.content : "-";
+        String revReason = (r.revokeReason != null && !r.revokeReason.isEmpty()) ? r.revokeReason : "-";
+
+        String[] values = {
+            String.valueOf(r.id),
+            fmt.format(new Date(r.time * 1000)),
+            truncateText(r.fromGroup, paint, colWidths[2]),
+            truncateText(String.valueOf(r.sender), paint, colWidths[3]),
+            r.method != null ? r.method : "-",
+            truncateText(c, paint, colWidths[5]),
+            truncateText(r.reason, paint, colWidths[6]),
+            st.isEmpty() ? "-" : st,
+            r.revokeTime == 0 ? "-" : fmt.format(new Date(r.revokeTime * 1000)),
+            truncateText(revReason, paint, colWidths[9])
+        };
+
+        for (int j = 0; j < values.length; j++) {
+            int color = (j == 7) ? statusColor : Color.BLACK;
+            paint.setColor(color);
+            canvas.drawText(values[j], colX[j], rowY + 29, paint);
+        }
+    }
+
+    FileOutputStream fos = new FileOutputStream(outputPath);
+    bitmap.compress(Bitmap.CompressFormat.PNG, 100, fos);
+    fos.close();
+}
+
+String truncateText(String text, Paint paint, float maxWidth) {
+    if (text == null || text.isEmpty()) return "-";
+    if (paint.measureText(text) <= maxWidth) return text;
+    String result = text;
+    while (result.length() > 0 && paint.measureText(result + "…") > maxWidth) {
+        result = result.substring(0, result.length() - 1);
+    }
+    return result.isEmpty() ? "…" : result + "…";
+}
+
+// 文字表格（回退用）
+String buildPunishRecordTable(List<PunishRecord> list) {
     if (list.isEmpty()) return "无记录";
     StringBuilder sb = new StringBuilder("记录列表：\n");
     sb.append("ID | 时间 | 发起群 | 发起者 | 方式 | 内容 | 原因 | 状态 | 撤销时间 | 撤销原因\n");
     SimpleDateFormat fmt = new SimpleDateFormat("MM-dd HH:mm");
-    for (Record r : list) {
+    for (PunishRecord r : list) {
+        String c = r.content != null && !r.content.isEmpty() ? r.content : "-";
+        String revReason = r.revokeReason != null && !r.revokeReason.isEmpty() ? r.revokeReason : "-";
+        String fg = r.fromGroup != null ? r.fromGroup : "-";
+        String m = r.method != null ? r.method : "-";
+        String rs = r.reason != null ? r.reason : "-";
+        String st = r.status != null ? r.status : "-";
         sb.append(r.id).append(" | ");
         sb.append(fmt.format(new Date(r.time * 1000))).append(" | ");
-        sb.append(r.fromGroup).append(" | ");
+        sb.append(fg).append(" | ");
         sb.append(r.sender).append(" | ");
-        sb.append(r.method).append(" | ");
-        sb.append(r.content.isEmpty() ? "-" : r.content).append(" | ");
-        sb.append(r.reason).append(" | ");
-        sb.append(r.status).append(" | ");
+        sb.append(m).append(" | ");
+        sb.append(c).append(" | ");
+        sb.append(rs).append(" | ");
+        sb.append(st).append(" | ");
         sb.append(r.revokeTime == 0 ? "-" : fmt.format(new Date(r.revokeTime * 1000))).append(" | ");
-        sb.append(r.revokeReason.isEmpty() ? "-" : r.revokeReason);
+        sb.append(revReason);
         sb.append("\n");
     }
     return sb.toString();
@@ -951,8 +1091,8 @@ void cmdRevoke(int level, String sender, String group, String[] parts) {
         sendGroupMsg(group, "记录ID必须为数字");
         return;
     }
-    Record target = null;
-    for (Record r : records) {
+    PunishRecord target = null;
+    for (PunishRecord r : records) {
         if (r.id == recordId) {
             target = r;
             break;
@@ -1043,7 +1183,7 @@ void cmdRevoke(int level, String sender, String group, String[] parts) {
     target.status = "已撤销";
     target.revokeTime = System.currentTimeMillis() / 1000;
     target.revokeReason = revokeReason;
-    updateRecord(target);
+    updatePunishRecord(target);
     saveAll();
 
     String revokeMsg = "记录 " + recordId + " 已撤销";
