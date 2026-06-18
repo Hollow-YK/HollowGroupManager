@@ -797,7 +797,7 @@ void onMsg(Object msgData) {
 
     switch (cmd) {
         case "help":
-            cmdHelp(level, peerUin);
+            cmdHelp(level, peerUin, parts);
             break;
         case "p":
             cmdPunish(level, userUin, peerUin, parts, msgData);
@@ -820,21 +820,295 @@ void onMsg(Object msgData) {
     }
 }
 
-void cmdHelp(int level, String group) {
-    StringBuilder sb = new StringBuilder("可用指令：\n");
-    if (level == 0) {
-        sb.append("/p <目标> <方式> [内容] <原因>  - 处罚\n");
-        sb.append("/h [目标] [-i]               - 查询记录（无参数=全部）\n");
-        sb.append("/a <目标> [等级]             - 设置权限\n");
-        sb.append("/group admin/set/remove/info - 管理组\n");
-        sb.append("/rp <记录ID> [原因]          - 撤销\n");
-    } else if (level == 1) {
-        sb.append("/p <目标> <方式> [内容] <原因>  - 处罚\n");
-        sb.append("/h <目标> [-i]               - 查询记录\n");
-        sb.append("/rp <记录ID> [原因]          - 撤销\n");
+void cmdHelp(int level, String group, String[] parts) {
+    if (parts.length < 2) {
+        sendHelpImage(group, "HollowGroupManager 帮助",
+            "权限等级: " + level + (level == 0 ? "（超级管理员）" : level == 1 ? "（管理员）" : ""),
+            buildOverviewHelp(level));
+        return;
     }
-    sb.append("/help - 帮助");
-    sendGroupMsg(group, sb.toString());
+    String subCmd = parts[1].toLowerCase();
+    List<String> lines = buildDetailHelp(level, subCmd);
+    if (lines == null) {
+        sendGroupMsg(group, "未知命令：" + subCmd + "，可用：help, p, rp, h, a, group");
+        return;
+    }
+    sendHelpImage(group, "帮助 — /" + subCmd, null, lines);
+}
+
+// ==================== 帮助内容构建 ====================
+
+List<String> buildOverviewHelp(int level) {
+    List<String> lines = new ArrayList<>();
+    lines.add("# 可用指令");
+    lines.add("");
+    lines.add("为方便展示，用/表示唤醒词。");
+    lines.add("");
+    lines.add("> /help [命令]");
+    lines.add("- 查看帮助，可指定命令查看详细用法");
+    lines.add("~ /help p");
+    lines.add("");
+    lines.add("> /p <目标> <方式> [内容] <原因>");
+    lines.add("- 处罚成员：kick（踢出）/ mute（禁言）/ warning（警告）");
+    lines.add("- 目标支持 @某人 或直接输入QQ号");
+    lines.add("~ /p @某人 mute 1d2h 广告");
+    lines.add("");
+    lines.add("> /rp <记录ID> [撤销原因]");
+    lines.add("- 撤销处罚记录");
+    lines.add("~ /rp 5 误判");
+    lines.add("");
+    lines.add("> /h [目标] [-i]");
+    lines.add("- 查询处罚记录，无参数显示全组记录表格");
+    lines.add("- 带 -i 输出指定成员图片表格详情");
+    lines.add("~ /h、/h @某人、/h 123456 -i");
+    if (level == 0) {
+        lines.add("");
+        lines.add("> /a <目标> [1/-1]");
+        lines.add("- 设置成员权限，1=管理员，-1=普通成员");
+        lines.add("- 仅超级管理员可用");
+        lines.add("~ /a @某人 1");
+        lines.add("");
+        lines.add("> /group <子命令>");
+        lines.add("- 管理组配置：admin/set/remove/info");
+        lines.add("- 仅超级管理员可用");
+        lines.add("~ /group admin 反馈组");
+    }
+    return lines;
+}
+
+List<String> buildDetailHelp(int level, String cmd) {
+    List<String> lines = new ArrayList<>();
+    switch (cmd) {
+        case "help":
+            lines.add("# /help — 查看帮助");
+            lines.add("> 格式");
+            lines.add("> /help [命令]");
+            lines.add("> 参数");
+            lines.add("- [命令]  可选，指定要查看详情的命令（help/p/rp/h/a/group）");
+            lines.add("- 无参数时显示指令概览");
+            lines.add("> 示例");
+            lines.add("~ /help  → 指令概览");
+            lines.add("~ /help p  → 查看处罚命令详情");
+            break;
+        case "p":
+            lines.add("# /p — 处罚成员");
+            lines.add("! 权限：0（超级管理员）/ 1（管理员）");
+            lines.add("> 格式");
+            lines.add("> /p <目标> <方式> [内容] <原因>");
+            lines.add("> 参数");
+            lines.add("- <目标>  被处罚者，支持 @某人 或直接输入QQ号");
+            lines.add("- <方式>  处罚类型：kick（踢出）/ mute（禁言）/ warn（警告）");
+            lines.add("- [内容]  kick：可选 f（加入黑名单）；mute：必填时长；warn：不需要");
+            lines.add("- <原因>  处罚原因，缺失时仅记录为\"不合规\"，不执行");
+            lines.add("> 禁言时长格式");
+            lines.add("- 纯数字（天）  1 = 1天、0.5 = 12小时");
+            lines.add("- 组合格式  1d2h30m、3h、30m");
+            lines.add("> 执行逻辑");
+            lines.add("- 遍历所有执行群，三步检查：成员在群 → 状态检查 → 执行");
+            lines.add("- 成员不在某群时静默跳过，不视为失败");
+            lines.add("> 示例");
+            lines.add("~ /p @某人 mute 1d2h 广告刷屏");
+            lines.add("~ /p 123456 kick f 严重违规");
+            lines.add("~ /p @某人 warn 注意言辞");
+            lines.add("~ /p @某人 kick 长期潜水");
+            break;
+        case "rp":
+            lines.add("# /rp — 撤销处罚");
+            lines.add("! 权限：0（超级管理员）/ 1（管理员）");
+            lines.add("> 格式");
+            lines.add("> /rp <记录ID> [撤销原因]");
+            lines.add("> 参数");
+            lines.add("- <记录ID>  要撤销的处罚记录ID，可通过 /h 查询获取");
+            lines.add("- [撤销原因]  可选，撤销原因说明");
+            lines.add("! 仅可撤销\"已执行\"或\"执行失败\"的记录");
+            lines.add("! 撤销禁言时自动解禁，撤销kick f时自动移出黑名单");
+            lines.add("> 示例");
+            lines.add("~ /rp 5  → 撤销记录5");
+            lines.add("~ /rp 5 误判，实际未违规");
+            break;
+        case "h":
+            lines.add("# /h — 查询记录");
+            lines.add("! 权限：0（超级管理员）/ 1（管理员）");
+            lines.add("> 格式");
+            lines.add("> /h [目标] [-i]");
+            lines.add("> 参数");
+            lines.add("- [目标]  可选，支持 @某人 或直接输入QQ号");
+            lines.add("- [-i]  可选，详情模式，输出图片表格");
+            lines.add("> 三种模式");
+            lines.add("- 无参数  图片表格展示管理组全部处罚记录");
+            lines.add("- 指定目标  文字汇总统计（次数、时长等）");
+            lines.add("- 指定目标 -i  图片表格详情（含状态彩色标注）");
+            lines.add("! 状态颜色：绿色已执行 / 橙色已撤销 / 红色执行失败 / 灰色不合规");
+            lines.add("> 示例");
+            lines.add("~ /h  → 显示管理组全部记录");
+            lines.add("~ /h @某人  → 汇总统计");
+            lines.add("~ /h 123456 -i  → 图片表格详情");
+            break;
+        case "a":
+            if (level != 0) { lines.add("! 此命令仅超级管理员可用，当前无权查看"); break; }
+            lines.add("# /a — 设置权限");
+            lines.add("! 权限：0（仅超级管理员）");
+            lines.add("> 格式");
+            lines.add("> /a <目标> [1/-1]");
+            lines.add("> 参数");
+            lines.add("- <目标>  成员，支持 @某人 或直接输入QQ号");
+            lines.add("- [1/-1]  1=管理员（默认），-1=普通成员");
+            lines.add("! 不可设为0，不可修改自己的权限");
+            lines.add("> 示例");
+            lines.add("~ /a @某人  → 设为管理员");
+            lines.add("~ /a 123456 -1  → 降为普通成员");
+            break;
+        case "group":
+            if (level != 0) { lines.add("! 此命令仅超级管理员可用，当前无权查看"); break; }
+            lines.add("# /group — 管理组配置");
+            lines.add("! 权限：0（仅超级管理员）");
+            lines.add("> 子命令");
+            lines.add("- admin <组名>  将当前群设为管理群并创建管理组");
+            lines.add("- set <组名>  将当前群加入管理组作为执行群");
+            lines.add("- remove  将当前群移出管理组");
+            lines.add("- info  查看当前群所在管理组信息");
+            lines.add("! 管理群不能作为执行群，不可重复加入管理组");
+            lines.add("> 示例");
+            lines.add("~ /group admin 反馈组");
+            lines.add("~ /group set 反馈组");
+            lines.add("~ /group info");
+            lines.add("~ /group remove");
+            break;
+        default:
+            return null;
+    }
+    return lines;
+}
+
+// ==================== 帮助图片生成 ====================
+
+void sendHelpImage(String group, String title, String subtitle, List<String> lines) {
+    try {
+        String path = pluginPath + "/help_" + group + "_" + System.currentTimeMillis() + ".png";
+        generateHelpImage(title, subtitle, lines, path);
+        sendPic(group, path, 2);
+        new File(path).delete();
+    } catch (Exception e) {
+        // 图片生成失败时回退到文字
+        StringBuilder sb = new StringBuilder(title).append("\n");
+        for (String line : lines) {
+            if (line.isEmpty()) { sb.append("\n"); continue; }
+            sb.append(line.length() > 2 ? line.substring(2) : line).append("\n");
+        }
+        sendGroupMsg(group, sb.toString());
+    }
+}
+
+void generateHelpImage(String title, String subtitle, List<String> lines, String outputPath) throws IOException {
+    int imgWidth = 820;
+    int leftPad = 28;
+    int rightPad = 20;
+    int contentWidth = imgWidth - leftPad - rightPad;
+
+    Paint measurePaint = new Paint();
+    measurePaint.setAntiAlias(true);
+
+    // 第一遍：计算总高度
+    int y = 48;
+    if (subtitle != null && !subtitle.isEmpty()) y += 36;
+    int divY = y + 12;
+    int cy = divY + 28;
+
+    for (String line : lines) {
+        if (line.isEmpty()) { cy += 18; continue; }
+        char prefix = line.charAt(0);
+        if (prefix == '#') cy += 42;
+        else if (prefix == '>') cy += 38;
+        else if (prefix == '-') cy += 34;
+        else if (prefix == '~') cy += 30;
+        else if (prefix == '!') cy += 34;
+        else cy += 34;
+    }
+    int imgHeight = cy + 30;
+
+    Bitmap bitmap = Bitmap.createBitmap(imgWidth, imgHeight, Bitmap.Config.ARGB_8888);
+    Canvas canvas = new Canvas(bitmap);
+    Paint paint = new Paint();
+    paint.setAntiAlias(true);
+    canvas.drawColor(Color.WHITE);
+
+    // 标题
+    paint.setColor(Color.parseColor("#1A237E"));
+    paint.setTypeface(Typeface.DEFAULT_BOLD);
+    paint.setTextSize(32);
+    canvas.drawText(title, leftPad, 44, paint);
+
+    // 副标题
+    if (subtitle != null && !subtitle.isEmpty()) {
+        paint.setColor(Color.parseColor("#757575"));
+        paint.setTypeface(Typeface.DEFAULT);
+        paint.setTextSize(22);
+        canvas.drawText(subtitle, leftPad, 78, paint);
+    }
+
+    // 分隔线
+    paint.setColor(Color.parseColor("#E0E0E0"));
+    paint.setStrokeWidth(2);
+    canvas.drawLine(leftPad, divY, imgWidth - rightPad, divY, paint);
+    paint.setStrokeWidth(1);
+
+    // 内容
+    cy = divY + 28;
+    for (String line : lines) {
+        if (line.isEmpty()) { cy += 18; continue; }
+        char prefix = line.charAt(0);
+        String text = line.length() > 2 ? line.substring(2) : "";
+        int indent = (prefix == '#' || prefix == '>') ? 0 : 20;
+
+        switch (prefix) {
+            case '#':
+                paint.setColor(Color.parseColor("#1565C0"));
+                paint.setTypeface(Typeface.DEFAULT_BOLD);
+                paint.setTextSize(22);
+                cy += 42;
+                canvas.drawText(text, leftPad + indent, cy - 12, paint);
+                break;
+            case '>':
+                paint.setColor(Color.parseColor("#1A237E"));
+                paint.setTypeface(Typeface.DEFAULT_BOLD);
+                paint.setTextSize(20);
+                cy += 38;
+                canvas.drawText(text, leftPad + indent, cy - 10, paint);
+                break;
+            case '-':
+                paint.setColor(Color.BLACK);
+                paint.setTypeface(Typeface.DEFAULT);
+                paint.setTextSize(19);
+                cy += 34;
+                canvas.drawText(text, leftPad + indent, cy - 9, paint);
+                break;
+            case '~':
+                paint.setColor(Color.parseColor("#757575"));
+                paint.setTypeface(Typeface.DEFAULT);
+                paint.setTextSize(18);
+                cy += 30;
+                canvas.drawText(text, leftPad + indent, cy - 8, paint);
+                break;
+            case '!':
+                paint.setColor(Color.parseColor("#E65100"));
+                paint.setTypeface(Typeface.DEFAULT);
+                paint.setTextSize(19);
+                cy += 34;
+                canvas.drawText(text, leftPad + indent, cy - 9, paint);
+                break;
+            default:
+                paint.setColor(Color.BLACK);
+                paint.setTypeface(Typeface.DEFAULT);
+                paint.setTextSize(19);
+                cy += 34;
+                canvas.drawText(text, leftPad + indent, cy - 9, paint);
+                break;
+        }
+    }
+
+    FileOutputStream fos = new FileOutputStream(outputPath);
+    bitmap.compress(Bitmap.CompressFormat.PNG, 100, fos);
+    fos.close();
 }
 
 void cmdPunish(int level, String sender, String group, String[] parts, Object msgData) {
