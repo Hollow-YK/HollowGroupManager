@@ -1,0 +1,45 @@
+[changelog]
+header = ""
+body = """\
+{% if version %}\
+## {{ version | trim_start_matches(pat="v") }} ({{ timestamp | date(format="%Y-%m-%d") }})
+
+{% endif %}\
+{% for group, commits in commits | group_by(attribute="group") %}
+### {{ group }}
+{% for commit in commits %}
+- {% if commit.github.pr_title %}{{ commit.github.pr_title }}{% else %}{{ commit.message | trim }}{% endif %}{% if commit.github.pr_number %} ([#{{ commit.github.pr_number }}](https://github.com/Hollow-YK/HollowGroupManager/pull/{{ commit.github.pr_number }})){% endif %}{% if commit.github.username %}  @{{ commit.github.username }}{% endif %}
+{% endfor %}
+
+{% endfor %}\
+{% if contributors %}
+## 新贡献者 ❤️
+{% for contributor in contributors %}
+* @{{ contributor.username }} made their first contribution in [#{{ contributor.pr_number }}](https://github.com/Hollow-YK/HollowGroupManager/pull/{{ contributor.pr_number }})
+{% endfor %}
+{% endif %}"""
+trim = true
+
+[git]
+conventional_commits = false
+filter_unconventional = false
+
+[remote.github]
+owner = "Hollow-YK"
+repo = "HollowGroupManager"
+
+[commit_parsers]
+# 基于 PR Label 分类（与 .github/release.yml 保持一致）
+{ field = "github.labels", pattern = "feat|feature|enhancement", group = "✨ 新功能" }
+{ field = "github.labels", pattern = "fix|bug|bugfix", group = "🐛 Bug修复" }
+{ field = "github.labels", pattern = "perf|performance", group = "⚡ 性能优化" }
+{ field = "github.labels", pattern = "docs|documentation", group = "📝 文档" }
+{ field = "github.labels", pattern = "refactor", group = "♻️ 代码重构" }
+{ field = "github.labels", pattern = "style", group = "🎨 样式" }
+{ field = "github.labels", pattern = "test|testing", group = "🧪 测试" }
+{ field = "github.labels", pattern = "chore|deps|dependencies", group = "🔧 日常维护" }
+{ field = "github.labels", pattern = "ci|build", group = "👷 CI/CD" }
+# 无法识别的 PR 标签 → 归入"其他"
+{ field = "github.labels", pattern = ".*", group = "📦 其他" }
+# 跳过非 PR commit（版本号提交等）
+{ message = ".*", skip = true }
