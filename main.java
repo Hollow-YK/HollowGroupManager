@@ -749,6 +749,15 @@ String extractQQ(String text) {
     return null;
 }
 
+// 从消息中解析目标QQ：优先at列表，其次从文本提取数字
+String resolveTargetQQ(Object msgData, String text) {
+    List<String> atList = msgData.atList;
+    if (atList != null && !atList.isEmpty()) {
+        return atList.get(0);
+    }
+    return extractQQ(text);
+}
+
 // ==================== 指令解析与执行 ====================
 void onMsg(Object msgData) {
     if (!initialized) {
@@ -794,10 +803,10 @@ void onMsg(Object msgData) {
             cmdPunish(level, userUin, peerUin, parts, msgData);
             break;
         case "h":
-            cmdQuery(level, peerUin, parts);
+            cmdQuery(level, peerUin, parts, msgData);
             break;
         case "a":
-            cmdPermission(level, userUin, peerUin, parts);
+            cmdPermission(level, userUin, peerUin, parts, msgData);
             break;
         case "group":
             cmdGroup(level, userUin, peerUin, parts);
@@ -834,16 +843,7 @@ void cmdPunish(int level, String sender, String group, String[] parts, Object ms
         return;
     }
     // 被处罚者解析
-    String targetStr = parts[1];
-    String targetQQ = null;
-    // 优先使用艾特列表
-    List<String> atList = msgData.atList;
-    if (atList != null && !atList.isEmpty()) {
-        targetQQ = atList.get(0);
-    }
-    if (targetQQ == null) {
-        targetQQ = extractQQ(targetStr);
-    }
+    String targetQQ = resolveTargetQQ(msgData, parts[1]);
     if (targetQQ == null || targetQQ.isEmpty()) {
         sendGroupMsg(group, "未找到被处罚者QQ，请艾特或输入QQ号");
         return;
@@ -1051,15 +1051,14 @@ void removeFromBlacklist(long qq, String groupName) {
     blacklist.removeIf(b -> b.qq == qq && b.groupName.equals(groupName));
 }
 
-void cmdQuery(int level, String group, String[] parts) {
+void cmdQuery(int level, String group, String[] parts, Object msgData) {
     if (parts.length < 2) {
-        sendGroupMsg(group, "格式：/h <成员QQ> [-i]");
+        sendGroupMsg(group, "格式：/h <成员> [-i]（可at）");
         return;
     }
-    String targetStr = parts[1];
-    String targetQQ = extractQQ(targetStr);
-    if (targetQQ == null) {
-        sendGroupMsg(group, "请提供有效的QQ号");
+    String targetQQ = resolveTargetQQ(msgData, parts[1]);
+    if (targetQQ == null || targetQQ.isEmpty()) {
+        sendGroupMsg(group, "未找到目标QQ，请at或输入QQ号");
         return;
     }
     long target = Long.parseLong(targetQQ);
@@ -1269,18 +1268,18 @@ String buildPunishRecordTable(List<PunishRecord> list) {
     return sb.toString();
 }
 
-void cmdPermission(int level, String sender, String group, String[] parts) {
+void cmdPermission(int level, String sender, String group, String[] parts, Object msgData) {
     if (level != 0) {
         sendGroupMsg(group, "权限不足，仅超级管理员可用");
         return;
     }
     if (parts.length < 2) {
-        sendGroupMsg(group, "格式：/a <成员QQ> [1/-1]");
+        sendGroupMsg(group, "格式：/a <成员> [1/-1]（可at）");
         return;
     }
-    String targetQQ = extractQQ(parts[1]);
-    if (targetQQ == null) {
-        sendGroupMsg(group, "未识别到QQ号");
+    String targetQQ = resolveTargetQQ(msgData, parts[1]);
+    if (targetQQ == null || targetQQ.isEmpty()) {
+        sendGroupMsg(group, "未找到目标QQ，请at或输入QQ号");
         return;
     }
     if (targetQQ.equals(sender)) {
