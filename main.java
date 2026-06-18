@@ -18,6 +18,7 @@ import java.io.*;
 import java.util.*;
 import java.text.SimpleDateFormat;
 import java.util.regex.*;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicInteger;
 import android.graphics.Bitmap;
 import android.graphics.Canvas;
@@ -30,10 +31,11 @@ List<String> wakeWords;
 Set<String> superAdmins;
 String dataDirPath;
 
-Map<String, ManagementGroup> groups = new LinkedHashMap<>();
+final Object dataLock = new Object();
+Map<String, ManagementGroup> groups = Collections.synchronizedMap(new LinkedHashMap<>());
 List<PunishRecord> records = Collections.synchronizedList(new ArrayList<>());
 Map<Integer, PunishRecord> recordsById = Collections.synchronizedMap(new LinkedHashMap<>());
-Map<String, Integer> permissions = new HashMap<>();
+Map<String, Integer> permissions = new ConcurrentHashMap<>();
 List<BlacklistItem> blacklist = Collections.synchronizedList(new ArrayList<>());
 AtomicInteger nextPunishRecordId = new AtomicInteger(1);
 
@@ -359,13 +361,13 @@ try { checkAndRepairDataFiles(); } catch (Exception e) {
 class ManagementGroup {
     String name;
     String adminGroup;
-    Set<String> executionGroups = new LinkedHashSet<>();
+    Set<String> executionGroups = Collections.synchronizedSet(new LinkedHashSet<>());
 
     Map<String, Object> toMap() {
         Map<String, Object> map = new LinkedHashMap<>();
         map.put("name", name);
         map.put("adminGroup", adminGroup);
-        map.put("executionGroups", new ArrayList<>(executionGroups));
+        synchronized (executionGroups) { map.put("executionGroups", new ArrayList<>(executionGroups)); }
         return map;
     }
 
@@ -374,7 +376,7 @@ class ManagementGroup {
         g.name = (String) map.get("name");
         g.adminGroup = (String) map.get("adminGroup");
         List<String> execs = (List<String>) map.get("executionGroups");
-        if (execs != null) g.executionGroups = new LinkedHashSet<>(execs);
+        if (execs != null) g.executionGroups = Collections.synchronizedSet(new LinkedHashSet<>(execs));
         return g;
     }
 }
@@ -470,26 +472,28 @@ void init() {
     // 数据文件也已在顶层代码中验证，确保是合法 JSON
 
     // 加载数据
-    groups = loadMap(dataDirPath + "/groups.json", ManagementGroup::fromMap);
+    groups = Collections.synchronizedMap(loadMap(dataDirPath + "/groups.json", ManagementGroup::fromMap));
     records = Collections.synchronizedList(loadList(dataDirPath + "/records.json", PunishRecord::fromMap));
-    permissions = loadSimpleMap(dataDirPath + "/permissions.json");
+    permissions = new ConcurrentHashMap<>(loadSimpleMap(dataDirPath + "/permissions.json"));
     blacklist = Collections.synchronizedList(loadList(dataDirPath + "/blacklist.json", BlacklistItem::fromMap));
 
     // 构建ID索引并计算下一个记录ID
     int maxId = 0;
-    for (PunishRecord r : records) {
-        recordsById.put(r.id, r);
-        if (r.id > maxId) maxId = r.id;
+    synchronized (records) {
+        for (PunishRecord r : records) {
+            recordsById.put(r.id, r);
+            if (r.id > maxId) maxId = r.id;
+        }
     }
     nextPunishRecordId.set(maxId + 1);
 }
 
 // 序列化工具
 void saveAll() {
-    saveList(dataDirPath + "/records.json", records, PunishRecord::toMap);
-    saveMap(dataDirPath + "/groups.json", groups, ManagementGroup::toMap);
+    synchronized (records) { saveList(dataDirPath + "/records.json", records, PunishRecord::toMap); }
+    synchronized (groups) { saveMap(dataDirPath + "/groups.json", groups, ManagementGroup::toMap); }
     saveSimpleMap(dataDirPath + "/permissions.json", permissions);
-    saveList(dataDirPath + "/blacklist.json", blacklist, BlacklistItem::toMap);
+    synchronized (blacklist) { saveList(dataDirPath + "/blacklist.json", blacklist, BlacklistItem::toMap); }
 }
 
 // 加载/保存集合
@@ -690,8 +694,10 @@ int getPermissionLevel(String qq) {
 }
 
 ManagementGroup findGroupByGroupId(String groupId) {
-    for (ManagementGroup g : groups.values()) {
-        if (g.adminGroup.equals(groupId) || g.executionGroups.contains(groupId)) return g;
+    synchronized (groups) {
+        for (ManagementGroup g : groups.values()) {
+            if (g.adminGroup.equals(groupId) || g.executionGroups.contains(groupId)) return g;
+        }
     }
     return null;
 }
@@ -908,7 +914,8 @@ void cmdPunish(int level, String sender, String group, String[] parts, Object ms
     PunishRecord r = createPunishRecord(sender, group, Long.parseLong(targetQQ), method, content, reason, "执行中");
 
     // 遍历执行群（三步检查：成员在群 → 状态检查 → 执行）
-    List<String> execGroups = new ArrayList<>(mg.executionGroups);
+    List<String> execGroups;
+    synchronized (mg.executionGroups) { execGroups = new ArrayList<>(mg.executionGroups); }
     boolean anySuccess = false;
     boolean anyFail = false;
     List<String> failGroups = new ArrayList<>();
@@ -1014,8 +1021,10 @@ PunishRecord createPunishRecord(String sender, String fromGroup, long target, St
     r.status = status;
     r.failDetail = "";
     r.revokeReason = "";
-    records.add(r);
-    recordsById.put(r.id, r);
+    synchronized (dataLock) {
+        records.add(r);
+        recordsById.put(r.id, r);
+    }
     return r;
 }
 
@@ -1024,16 +1033,18 @@ void updatePunishRecord(PunishRecord r) {
 }
 
 void addToBlacklist(long qq, String reason, String groupName) {
-    // 检查是否存在
-    for (BlacklistItem b : blacklist) {
-        if (b.qq == qq && b.groupName.equals(groupName)) return;
-    }
     BlacklistItem item = new BlacklistItem();
     item.qq = qq;
     item.reason = reason;
     item.addTime = System.currentTimeMillis() / 1000;
     item.groupName = groupName;
-    blacklist.add(item);
+    synchronized (blacklist) {
+        // 检查是否存在
+        for (BlacklistItem b : blacklist) {
+            if (b.qq == qq && b.groupName.equals(groupName)) return;
+        }
+        blacklist.add(item);
+    }
 }
 
 void removeFromBlacklist(long qq, String groupName) {
@@ -1061,10 +1072,12 @@ void cmdQuery(int level, String group, String[] parts) {
     }
 
     List<PunishRecord> filtered = new ArrayList<>();
-    for (PunishRecord r : records) {
-        if (r.target == target && (r.fromGroup.equals(group) || mg.executionGroups.contains(r.fromGroup) || mg.adminGroup.equals(r.fromGroup))) {
-            // 组内共享记录
-            filtered.add(r);
+    synchronized (records) {
+        for (PunishRecord r : records) {
+            if (r.target == target && (r.fromGroup.equals(group) || mg.executionGroups.contains(r.fromGroup) || mg.adminGroup.equals(r.fromGroup))) {
+                // 组内共享记录
+                filtered.add(r);
+            }
         }
     }
 
@@ -1368,7 +1381,10 @@ void cmdGroup(int level, String sender, String group, String[] parts) {
                 return;
             }
             String role = info.adminGroup.equals(group) ? "管理群" : "执行群";
-            String execList = info.executionGroups.isEmpty() ? "无" : String.join(",", info.executionGroups);
+            String execList;
+            synchronized (info.executionGroups) {
+                execList = info.executionGroups.isEmpty() ? "无" : String.join(",", info.executionGroups);
+            }
             sendGroupMsg(group, "组名：" + info.name + "\n角色：" + role + "\n管理群：" + info.adminGroup + "\n执行群列表：" + execList);
             break;
         default:
@@ -1496,31 +1512,37 @@ void joinGroup(String group, String qq) {
     }
     ManagementGroup mg = findGroupByGroupId(group);
     if (mg == null) return;
-    for (BlacklistItem b : blacklist) {
-        if (b.qq == Long.parseLong(qq) && b.groupName.equals(mg.name)) {
-            try {
-                // 检查成员是否仍在群内
-                // 使用 getGroupMemberList 遍历比对 uin，比 getMemberInfo 更可靠
-                boolean memberInGroup = false;
-                List groupMembers = getGroupMemberList(group);
-                if (groupMembers != null) {
-                    for (Object m : groupMembers) {
-                        if (m.uin != null && m.uin.equals(qq)) {
-                            memberInGroup = true;
-                            break;
-                        }
+    BlacklistItem matched = null;
+    synchronized (blacklist) {
+        for (BlacklistItem b : blacklist) {
+            if (b.qq == Long.parseLong(qq) && b.groupName.equals(mg.name)) {
+                matched = b;
+                break;
+            }
+        }
+    }
+    if (matched != null) {
+        try {
+            // 检查成员是否仍在群内
+            // 使用 getGroupMemberList 遍历比对 uin，比 getMemberInfo 更可靠
+            boolean memberInGroup = false;
+            List groupMembers = getGroupMemberList(group);
+            if (groupMembers != null) {
+                for (Object m : groupMembers) {
+                    if (m.uin != null && m.uin.equals(qq)) {
+                        memberInGroup = true;
+                        break;
                     }
                 }
-                if (!memberInGroup) {
-                    log("info.log", "黑名单成员 " + qq + " 在群（" + group + "）中已不存在，跳过踢出。");
-                    break;
-                }
-                kickGroup(group, qq, false);
-                sendGroupMsg(group, "用户 " + qq + " 在管理组黑名单中，已自动移出。原因：" + b.reason);
-            } catch (Exception e) {
-                log("error.log", "黑名单踢人失败：" + e.getMessage());
             }
-            break;
+            if (!memberInGroup) {
+                log("info.log", "黑名单成员 " + qq + " 在群（" + group + "）中已不存在，跳过踢出。");
+                return;
+            }
+            kickGroup(group, qq, false);
+            sendGroupMsg(group, "用户 " + qq + " 在管理组黑名单中，已自动移出。原因：" + matched.reason);
+        } catch (Exception e) {
+            log("error.log", "黑名单踢人失败：" + e.getMessage());
         }
     }
 }
