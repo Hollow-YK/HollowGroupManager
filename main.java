@@ -387,7 +387,7 @@ class PunishRecord {
     long time;
     String fromGroup;
     long target;
-    String method;   // kick, mute, warning
+    String method;   // kick, mute, warn
     String content;  // f, 1d2h, 空
     String reason;
     String status;   // 不合规, 已执行, 执行失败, 已撤销
@@ -435,7 +435,7 @@ class PunishRecord {
         switch (method) {
             case "kick": return "kick" + (c.equals("f") ? " f" : "");
             case "mute": return "mute " + c;
-            case "warning": return "warning";
+            case "warn": return "warn";
             default: return method != null ? method : "";
         }
     }
@@ -749,6 +749,15 @@ String extractQQ(String text) {
     return null;
 }
 
+// 从消息中解析目标QQ：优先at列表，其次从文本提取数字
+String resolveTargetQQ(Object msgData, String text) {
+    List<String> atList = msgData.atList;
+    if (atList != null && !atList.isEmpty()) {
+        return atList.get(0);
+    }
+    return extractQQ(text);
+}
+
 // ==================== 指令解析与执行 ====================
 void onMsg(Object msgData) {
     if (!initialized) {
@@ -794,10 +803,10 @@ void onMsg(Object msgData) {
             cmdPunish(level, userUin, peerUin, parts, msgData);
             break;
         case "h":
-            cmdQuery(level, peerUin, parts);
+            cmdQuery(level, peerUin, parts, msgData);
             break;
         case "a":
-            cmdPermission(level, userUin, peerUin, parts);
+            cmdPermission(level, userUin, peerUin, parts, msgData);
             break;
         case "group":
             cmdGroup(level, userUin, peerUin, parts);
@@ -815,7 +824,7 @@ void cmdHelp(int level, String group) {
     StringBuilder sb = new StringBuilder("可用指令：\n");
     if (level == 0) {
         sb.append("/p <目标> <方式> [内容] <原因>  - 处罚\n");
-        sb.append("/h <目标> [-i]               - 查询记录\n");
+        sb.append("/h [目标] [-i]               - 查询记录（无参数=全部）\n");
         sb.append("/a <目标> [等级]             - 设置权限\n");
         sb.append("/group admin/set/remove/info - 管理组\n");
         sb.append("/rp <记录ID> [原因]          - 撤销\n");
@@ -834,24 +843,15 @@ void cmdPunish(int level, String sender, String group, String[] parts, Object ms
         return;
     }
     // 被处罚者解析
-    String targetStr = parts[1];
-    String targetQQ = null;
-    // 优先使用艾特列表
-    List<String> atList = msgData.atList;
-    if (atList != null && !atList.isEmpty()) {
-        targetQQ = atList.get(0);
-    }
-    if (targetQQ == null) {
-        targetQQ = extractQQ(targetStr);
-    }
+    String targetQQ = resolveTargetQQ(msgData, parts[1]);
     if (targetQQ == null || targetQQ.isEmpty()) {
         sendGroupMsg(group, "未找到被处罚者QQ，请艾特或输入QQ号");
         return;
     }
 
     String method = parts[2].toLowerCase();
-    if (!method.equals("kick") && !method.equals("mute") && !method.equals("warning")) {
-        sendGroupMsg(group, "无效的处罚方式，可选：kick, mute, warning");
+    if (!method.equals("kick") && !method.equals("mute") && !method.equals("warn")) {
+        sendGroupMsg(group, "无效的处罚方式，可选：kick, mute, warn");
         return;
     }
 
@@ -882,7 +882,7 @@ void cmdPunish(int level, String sender, String group, String[] parts, Object ms
         } else {
             reasonStart = 3;
         }
-    } else { // warning
+    } else { // warn
         content = "";
         reasonStart = 3;
     }
@@ -966,7 +966,7 @@ void cmdPunish(int level, String sender, String group, String[] parts, Object ms
                     shutUp(gid, targetQQ, sec);
                     sendGroupMsg(gid, "[atUin=" + targetQQ + "] 因「" + reason + "」被禁言 " + content + "。");
                     break;
-                case "warning":
+                case "warn":
                     // 警告无实际操作，仅通报
                     sendGroupMsg(gid, "[atUin=" + targetQQ + "] 因「" + reason + "」被警告。");
                     break;
@@ -1051,25 +1051,34 @@ void removeFromBlacklist(long qq, String groupName) {
     blacklist.removeIf(b -> b.qq == qq && b.groupName.equals(groupName));
 }
 
-void cmdQuery(int level, String group, String[] parts) {
-    if (parts.length < 2) {
-        sendGroupMsg(group, "格式：/h <成员QQ> [-i]");
-        return;
-    }
-    String targetStr = parts[1];
-    String targetQQ = extractQQ(targetStr);
-    if (targetQQ == null) {
-        sendGroupMsg(group, "请提供有效的QQ号");
-        return;
-    }
-    long target = Long.parseLong(targetQQ);
-    boolean detail = parts.length > 2 && parts[2].equals("-i");
-
+void cmdQuery(int level, String group, String[] parts, Object msgData) {
     ManagementGroup mg = findGroupByGroupId(group);
     if (mg == null) {
         sendGroupMsg(group, "当前群不属于管理组");
         return;
     }
+
+    // 无参数：显示本管理组全部处罚记录
+    if (parts.length < 2) {
+        List<PunishRecord> all = new ArrayList<>();
+        synchronized (records) {
+            for (PunishRecord r : records) {
+                if (r.fromGroup.equals(group) || mg.executionGroups.contains(r.fromGroup) || mg.adminGroup.equals(r.fromGroup)) {
+                    all.add(r);
+                }
+            }
+        }
+        sendPunishRecordTableImage(group, all);
+        return;
+    }
+
+    String targetQQ = resolveTargetQQ(msgData, parts[1]);
+    if (targetQQ == null || targetQQ.isEmpty()) {
+        sendGroupMsg(group, "未找到目标QQ，请at或输入QQ号");
+        return;
+    }
+    long target = Long.parseLong(targetQQ);
+    boolean detail = parts.length > 2 && parts[2].equals("-i");
 
     List<PunishRecord> filtered = new ArrayList<>();
     synchronized (records) {
@@ -1269,18 +1278,18 @@ String buildPunishRecordTable(List<PunishRecord> list) {
     return sb.toString();
 }
 
-void cmdPermission(int level, String sender, String group, String[] parts) {
+void cmdPermission(int level, String sender, String group, String[] parts, Object msgData) {
     if (level != 0) {
         sendGroupMsg(group, "权限不足，仅超级管理员可用");
         return;
     }
     if (parts.length < 2) {
-        sendGroupMsg(group, "格式：/a <成员QQ> [1/-1]");
+        sendGroupMsg(group, "格式：/a <成员> [1/-1]（可at）");
         return;
     }
-    String targetQQ = extractQQ(parts[1]);
-    if (targetQQ == null) {
-        sendGroupMsg(group, "未识别到QQ号");
+    String targetQQ = resolveTargetQQ(msgData, parts[1]);
+    if (targetQQ == null || targetQQ.isEmpty()) {
+        sendGroupMsg(group, "未找到目标QQ，请at或输入QQ号");
         return;
     }
     if (targetQQ.equals(sender)) {
@@ -1489,7 +1498,7 @@ void cmdRevoke(int level, String sender, String group, String[] parts) {
             return;
         }
     }
-    // warning 和 kick 非 f 无操作
+    // warn 和 kick 非 f 无操作
 
     target.status = "已撤销";
     target.revokeTime = System.currentTimeMillis() / 1000;
