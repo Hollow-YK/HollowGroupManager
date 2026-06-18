@@ -842,7 +842,7 @@ List<String> buildOverviewHelp(int level) {
     List<String> lines = new ArrayList<>();
     lines.add("# 可用指令");
     lines.add("");
-    lines.add("为方便展示，用/表示唤醒词。");
+    lines.add("- 为方便展示，用/表示唤醒词。");
     lines.add("");
     lines.add("> /help [命令]");
     lines.add("- 查看帮助，可指定命令查看详细用法");
