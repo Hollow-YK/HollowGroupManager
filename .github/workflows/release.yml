@@ -44,58 +44,41 @@ jobs:
           echo "Extracted update log:"
           cat /tmp/update_log.md || echo "(empty)"
 
-      - name: Generate GitHub-style release notes
-        id: release_notes
+      - name: Generate changelog with git-cliff
+        id: changelog
         run: |
-          PREV_TAG=$(git tag --sort=-v:refname | sed -n "/^v${{ steps.meta.outputs.version }}$/{n;p}")
+          # 安装 git-cliff
+          curl -sSfL \
+            "https://github.com/orhun/git-cliff/releases/download/v2.9.0/git-cliff-2.9.0-x86_64-unknown-linux-gnu.tar.gz" \
+            | tar xz
+          sudo install git-cliff-*/git-cliff /usr/local/bin/
 
+          # 确定前一个 tag
+          PREV_TAG=$(git tag --sort=-v:refname | sed -n "/^${{ github.ref_name }}$/{n;p}")
+
+          # 生成 changelog
           if [ -n "$PREV_TAG" ]; then
-            PREV_TAG_PARAM="previous_tag_name=$PREV_TAG"
+            RANGE="${PREV_TAG}..${{ github.ref_name }}"
           else
-            PREV_TAG_PARAM=""
+            RANGE=""
           fi
 
-          # 调用 GitHub API 生成 release notes（与 GitHub 自动生成一致）
-          RESPONSE=$(curl -s -X POST \
-            -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
-            -H "Accept: application/vnd.github+json" \
-            "https://api.github.com/repos/${{ github.repository }}/releases/generate-notes" \
-            -d "{\"tag_name\": \"${{ github.ref_name }}\", \"target_commitish\": \"main\", ${PREV_TAG_PARAM:+\"$PREV_TAG_PARAM\",} \"configuration_file_path\": \".github/release.yml\"}")
+          git-cliff \
+            --github-repo "${{ github.repository }}" \
+            --github-token "${{ secrets.GITHUB_TOKEN }}" \
+            --log-option "--first-parent" \
+            --strip header \
+            --output /tmp/changelog.md \
+            $RANGE || echo "cliff_failed=true" >> "$GITHUB_OUTPUT"
 
-          echo "$RESPONSE" > /tmp/api_response.json
-          BODY=$(echo "$RESPONSE" | jq -r '.body // empty')
-
-          if [ -z "$BODY" ] || [ "$BODY" = "null" ]; then
-            echo "GitHub API failed, falling back to git log"
-            # Fallback: 手动生成变更列表
-            echo "## What's Changed" > /tmp/generated_notes.md
-            echo "" >> /tmp/generated_notes.md
-            if [ -n "$PREV_TAG" ]; then
-              git log "${PREV_TAG}..HEAD" --format="- %s" --no-merges >> /tmp/generated_notes.md
-            else
-              git log --format="- %s" --no-merges >> /tmp/generated_notes.md
-            fi
-
-            echo "" >> /tmp/generated_notes.md
-            echo "## New Contributors" >> /tmp/generated_notes.md
-            echo "" >> /tmp/generated_notes.md
-
-            if [ -n "$PREV_TAG" ]; then
-              git log "${PREV_TAG}..HEAD" --format="%an" --no-merges | sort -u | sed 's/^/- @/' >> /tmp/generated_notes.md
-            else
-              git log --format="%an" --no-merges | sort -u | sed 's/^/- @/' >> /tmp/generated_notes.md
-            fi
-          else
-            echo "$BODY" > /tmp/generated_notes.md
-          fi
-
-          echo "Generated release notes:"
-          cat /tmp/generated_notes.md
+          echo "Generated changelog:"
+          cat /tmp/changelog.md || echo "(empty)"
 
       - name: Compose final release body
         run: |
-          # 更新日志 + GitHub 风格 release notes
           {
+            # 更新日志 (history.txt) + 分类 PR changelog (git-cliff)
+            # PRIMARY: history.txt 提取的更新日志
             if [ -s /tmp/update_log.md ]; then
               echo "## 更新日志"
               echo ""
@@ -104,7 +87,21 @@ jobs:
               echo "---"
               echo ""
             fi
-            cat /tmp/generated_notes.md
+
+            # git-cliff 生成的分类 PR changelog
+            if [ -s /tmp/changelog.md ]; then
+              cat /tmp/changelog.md
+            else
+              # FALLBACK: git-cliff 失败时回退到 git log
+              PREV_TAG=$(git tag --sort=-v:refname | sed -n "/^${{ github.ref_name }}$/{n;p}")
+              echo "## ${{ steps.meta.outputs.version }} ($(date +%Y-%m-%d))"
+              echo ""
+              if [ -n "$PREV_TAG" ]; then
+                git log "${PREV_TAG}..HEAD" --format="- %s" --no-merges
+              else
+                git log --format="- %s" --no-merges
+              fi
+            fi
           } > /tmp/release_body.md
 
           echo "Final release body:"
