@@ -41,127 +41,7 @@ final Object initLock = new Object();
 
 SimpleDateFormat sdf = new SimpleDateFormat("yyyy-MM-dd HH:mm:ss");
 
-// ==================== 简易JSON读写（仅支持基本类型、Map、List） ====================
-String escapeJson(String s) {
-    return s.replace("\\", "\\\\").replace("\"", "\\\"");
-}
-
-String unescapeJson(String s) {
-    return s.replace("\\\"", "\"").replace("\\\\", "\\");
-}
-
-String toJson(Object obj) {
-    if (obj == null) return "null";
-    if (obj instanceof String) return "\"" + escapeJson((String) obj) + "\"";
-    if (obj instanceof Number) return obj.toString();
-    if (obj instanceof Boolean) return obj.toString();
-    if (obj instanceof Map) {
-        Map<?, ?> map = (Map<?, ?>) obj;
-        StringBuilder sb = new StringBuilder("{");
-        boolean first = true;
-        for (Map.Entry<?, ?> entry : map.entrySet()) {
-            if (!first) sb.append(",");
-            sb.append(toJson(entry.getKey().toString())).append(":").append(toJson(entry.getValue()));
-            first = false;
-        }
-        sb.append("}");
-        return sb.toString();
-    }
-    if (obj instanceof List) {
-        List<?> list = (List<?>) obj;
-        StringBuilder sb = new StringBuilder("[");
-        boolean first = true;
-        for (Object item : list) {
-            if (!first) sb.append(",");
-            sb.append(toJson(item));
-            first = false;
-        }
-        sb.append("]");
-        return sb.toString();
-    }
-    return "\"" + escapeJson(obj.toString()) + "\"";
-}
-
-// 简单解析器（递归下降）
-Object parseJson(String json) {
-    json = json.trim();
-    if (json.isEmpty()) return null;
-    char first = json.charAt(0);
-    if (first == '{') {
-        Map<String, Object> map = new LinkedHashMap<>();
-        json = json.substring(1, json.length() - 1).trim();
-        while (!json.isEmpty()) {
-            int colon = findSplit(json, ':');
-            String key = (String) parseJson(json.substring(0, colon).trim());
-            json = json.substring(colon + 1).trim();
-            int comma = findSplit(json, ',');
-            String valStr = json.substring(0, comma).trim();
-            map.put(key, parseJson(valStr));
-            json = json.substring(comma).trim();
-            if (json.startsWith(",")) json = json.substring(1).trim();
-        }
-        return map;
-    } else if (first == '[') {
-        List<Object> list = new ArrayList<>();
-        json = json.substring(1, json.length() - 1).trim();
-        while (!json.isEmpty()) {
-            int comma = findSplit(json, ',');
-            String valStr = json.substring(0, comma).trim();
-            if (!valStr.isEmpty()) list.add(parseJson(valStr));
-            json = json.substring(comma).trim();
-            if (json.startsWith(",")) json = json.substring(1).trim();
-        }
-        return list;
-    } else if (first == '"') {
-        int end = json.indexOf('"', 1);
-        while (end != -1) {
-            // 统计 end 前面连续反斜杠数量：奇数=转义，偶数=字符串结束
-            int bs = 0;
-            for (int j = end - 1; j >= 0 && json.charAt(j) == '\\'; j--) bs++;
-            if (bs % 2 == 0) break;
-            end = json.indexOf('"', end + 1);
-        }
-        if (end == -1) end = json.length() - 1;
-        return unescapeJson(json.substring(1, end));
-    } else {
-        try {
-            if (json.equals("true")) return true;
-            if (json.equals("false")) return false;
-            if (json.equals("null")) return null;
-            if (json.contains(".")) return Double.parseDouble(json);
-            return Long.parseLong(json);
-        } catch (Exception e) {
-            return json;
-        }
-    }
-}
-
-int findSplit(String json, char delimiter) {
-    int depth = 0;
-    boolean inString = false;
-    for (int i = 0; i < json.length(); i++) {
-        char c = json.charAt(i);
-        if (inString) {
-            if (c == '"') {
-                // 统计前面连续反斜杠数量：奇数=转义，偶数=字符串结束
-                int bs = 0;
-                for (int j = i - 1; j >= 0 && json.charAt(j) == '\\'; j--) bs++;
-                if (bs % 2 == 0) inString = false;
-            }
-            continue;
-        }
-        if (c == '"') { inString = true; continue; }
-        if (c == '{' || c == '[') depth++;
-        else if (c == '}' || c == ']') depth--;
-        else if (c == delimiter && depth == 0) return i;
-    }
-    return json.length();
-}
-
-// 校验器接口（需在使用前定义）
-interface Validator {
-    String validate(String filename, Object item, int index);
-}
+// ==================== JSON读写（使用org.json） ====================
 
 // ==================== 启动时配置与数据完整性检查 ====================
 
@@ -614,33 +494,27 @@ void saveAll() {
 <T> List<T> loadList(String path, Function<Map<String, Object>, T> mapper) {
     File file = new File(path);
     if (!file.exists()) return new ArrayList<>();
-    try (BufferedReader reader = new BufferedReader(new FileReader(file))) {
-        String content = readAll(reader);
-        Object parsed = parseJson(content);
-        if (parsed instanceof List) {
-            List<T> list = new ArrayList<>();
-            for (Object obj : (List) parsed) {
-                if (obj instanceof Map) list.add(mapper.apply((Map) obj));
-            }
-            return list;
+    try {
+        org.json.JSONArray arr = new org.json.JSONArray(readFileContent(file));
+        List<T> list = new ArrayList<>();
+        for (int i = 0; i < arr.length(); i++) {
+            list.add(mapper.apply(toMap(arr.getJSONObject(i))));
         }
+        return list;
     } catch (Exception e) {
         log("error.log", "加载数据失败 " + path + ": " + e.getMessage());
         // 尝试从 .tmp 恢复
         File tmpFile = new File(path + ".tmp");
         if (tmpFile.exists()) {
-            try (BufferedReader reader = new BufferedReader(new FileReader(tmpFile))) {
-                String content = readAll(reader);
-                Object parsed = parseJson(content);
-                if (parsed instanceof List) {
-                    List<T> list = new ArrayList<>();
-                    for (Object obj : (List) parsed) {
-                        if (obj instanceof Map) list.add(mapper.apply((Map) obj));
-                    }
-                    log("info.log", "从 .tmp 恢复数据成功 " + path);
-                    tmpFile.renameTo(file);
-                    return list;
+            try {
+                org.json.JSONArray arr = new org.json.JSONArray(readFileContent(tmpFile));
+                List<T> list = new ArrayList<>();
+                for (int i = 0; i < arr.length(); i++) {
+                    list.add(mapper.apply(toMap(arr.getJSONObject(i))));
                 }
+                log("info.log", "从 .tmp 恢复数据成功 " + path);
+                tmpFile.renameTo(file);
+                return list;
             } catch (Exception e2) {
                 log("error.log", "从 .tmp 恢复数据失败 " + path + ": " + e2.getMessage());
             }
@@ -650,11 +524,11 @@ void saveAll() {
 }
 
 <T> void saveList(String path, List<T> list, Function<T, Map<String, Object>> mapper) {
-    List<Object> jsonList = new ArrayList<>();
-    for (T item : list) jsonList.add(mapper.apply(item));
+    org.json.JSONArray arr = new org.json.JSONArray();
+    for (T item : list) arr.put(new org.json.JSONObject(mapper.apply(item)));
     String tmpPath = path + ".tmp";
     try (PrintWriter out = new PrintWriter(new FileWriter(tmpPath))) {
-        out.print(toJson(jsonList));
+        out.print(arr.toString());
     } catch (Exception e) {
         log("error.log", "保存数据失败 " + path + ": " + e.getMessage());
         new File(tmpPath).delete();
@@ -671,37 +545,29 @@ void saveAll() {
 Map<String, ManagementGroup> loadMap(String path, Function<Map<String, Object>, ManagementGroup> mapper) {
     File file = new File(path);
     if (!file.exists()) return new LinkedHashMap<>();
-    try (BufferedReader reader = new BufferedReader(new FileReader(file))) {
-        Object parsed = parseJson(readAll(reader));
-        if (parsed instanceof List) {
-            Map<String, ManagementGroup> map = new LinkedHashMap<>();
-            for (Object obj : (List) parsed) {
-                if (obj instanceof Map) {
-                    ManagementGroup g = mapper.apply((Map) obj);
-                    map.put(g.name, g);
-                }
-            }
-            return map;
+    try {
+        org.json.JSONArray arr = new org.json.JSONArray(readFileContent(file));
+        Map<String, ManagementGroup> map = new LinkedHashMap<>();
+        for (int i = 0; i < arr.length(); i++) {
+            ManagementGroup g = mapper.apply(toMap(arr.getJSONObject(i)));
+            map.put(g.name, g);
         }
+        return map;
     } catch (Exception e) {
         log("error.log", "加载管理组失败: " + e.getMessage());
         // 尝试从 .tmp 恢复
         File tmpFile = new File(path + ".tmp");
         if (tmpFile.exists()) {
-            try (BufferedReader reader = new BufferedReader(new FileReader(tmpFile))) {
-                Object parsed = parseJson(readAll(reader));
-                if (parsed instanceof List) {
-                    Map<String, ManagementGroup> map = new LinkedHashMap<>();
-                    for (Object obj : (List) parsed) {
-                        if (obj instanceof Map) {
-                            ManagementGroup g = mapper.apply((Map) obj);
-                            map.put(g.name, g);
-                        }
-                    }
-                    log("info.log", "从 .tmp 恢复管理组成功 " + path);
-                    tmpFile.renameTo(file);
-                    return map;
+            try {
+                org.json.JSONArray arr = new org.json.JSONArray(readFileContent(tmpFile));
+                Map<String, ManagementGroup> map = new LinkedHashMap<>();
+                for (int i = 0; i < arr.length(); i++) {
+                    ManagementGroup g = mapper.apply(toMap(arr.getJSONObject(i)));
+                    map.put(g.name, g);
                 }
+                log("info.log", "从 .tmp 恢复管理组成功 " + path);
+                tmpFile.renameTo(file);
+                return map;
             } catch (Exception e2) {
                 log("error.log", "从 .tmp 恢复管理组失败 " + path + ": " + e2.getMessage());
             }
@@ -711,11 +577,11 @@ Map<String, ManagementGroup> loadMap(String path, Function<Map<String, Object>, 
 }
 
 void saveMap(String path, Map<String, ManagementGroup> map, Function<ManagementGroup, Map<String, Object>> mapper) {
-    List<Object> list = new ArrayList<>();
-    for (ManagementGroup g : map.values()) list.add(mapper.apply(g));
+    org.json.JSONArray arr = new org.json.JSONArray();
+    for (ManagementGroup g : map.values()) arr.put(new org.json.JSONObject(mapper.apply(g)));
     String tmpPath = path + ".tmp";
     try (PrintWriter out = new PrintWriter(new FileWriter(tmpPath))) {
-        out.print(toJson(list));
+        out.print(arr.toString());
     } catch (Exception e) {
         log("error.log", "保存管理组失败: " + e.getMessage());
         new File(tmpPath).delete();
@@ -732,31 +598,31 @@ void saveMap(String path, Map<String, ManagementGroup> map, Function<ManagementG
 Map<String, Integer> loadSimpleMap(String path) {
     File file = new File(path);
     if (!file.exists()) return new HashMap<>();
-    try (BufferedReader reader = new BufferedReader(new FileReader(file))) {
-        Object parsed = parseJson(readAll(reader));
-        if (parsed instanceof Map) {
-            Map<String, Integer> map = new HashMap<>();
-            for (Map.Entry<?, ?> e : ((Map<?, ?>) parsed).entrySet()) {
-                map.put(e.getKey().toString(), ((Number) e.getValue()).intValue());
-            }
-            return map;
+    try {
+        org.json.JSONObject obj = new org.json.JSONObject(readFileContent(file));
+        Map<String, Integer> map = new HashMap<>();
+        java.util.Iterator<String> keys = obj.keys();
+        while (keys.hasNext()) {
+            String key = keys.next();
+            map.put(key, obj.getInt(key));
         }
+        return map;
     } catch (Exception e) {
         log("error.log", "加载权限失败: " + e.getMessage());
         // 尝试从 .tmp 恢复
         File tmpFile = new File(path + ".tmp");
         if (tmpFile.exists()) {
-            try (BufferedReader reader = new BufferedReader(new FileReader(tmpFile))) {
-                Object parsed = parseJson(readAll(reader));
-                if (parsed instanceof Map) {
-                    Map<String, Integer> map = new HashMap<>();
-                    for (Map.Entry<?, ?> entry : ((Map<?, ?>) parsed).entrySet()) {
-                        map.put(entry.getKey().toString(), ((Number) entry.getValue()).intValue());
-                    }
-                    log("info.log", "从 .tmp 恢复权限成功 " + path);
-                    tmpFile.renameTo(file);
-                    return map;
+            try {
+                org.json.JSONObject obj = new org.json.JSONObject(readFileContent(tmpFile));
+                Map<String, Integer> map = new HashMap<>();
+                java.util.Iterator<String> keys = obj.keys();
+                while (keys.hasNext()) {
+                    String key = keys.next();
+                    map.put(key, obj.getInt(key));
                 }
+                log("info.log", "从 .tmp 恢复权限成功 " + path);
+                tmpFile.renameTo(file);
+                return map;
             } catch (Exception e2) {
                 log("error.log", "从 .tmp 恢复权限失败 " + path + ": " + e2.getMessage());
             }
@@ -766,9 +632,10 @@ Map<String, Integer> loadSimpleMap(String path) {
 }
 
 void saveSimpleMap(String path, Map<String, Integer> map) {
+    org.json.JSONObject obj = new org.json.JSONObject(map);
     String tmpPath = path + ".tmp";
     try (PrintWriter out = new PrintWriter(new FileWriter(tmpPath))) {
-        out.print(toJson(map));
+        out.print(obj.toString());
     } catch (Exception e) {
         log("error.log", "保存权限失败: " + e.getMessage());
         new File(tmpPath).delete();
@@ -782,11 +649,31 @@ void saveSimpleMap(String path, Map<String, Integer> map) {
     }
 }
 
-String readAll(BufferedReader reader) throws IOException {
-    StringBuilder sb = new StringBuilder();
-    String line;
-    while ((line = reader.readLine()) != null) sb.append(line);
-    return sb.toString();
+// ==================== org.json → Map/List 转换辅助 ====================
+// 将 org.json.JSONObject 递归转换为 Map<String, Object>，保证与 fromMap 兼容
+Map<String, Object> toMap(org.json.JSONObject obj) {
+    Map<String, Object> map = new LinkedHashMap<>();
+    java.util.Iterator<String> keys = obj.keys();
+    while (keys.hasNext()) {
+        String key = keys.next();
+        map.put(key, toValue(obj.get(key)));
+    }
+    return map;
+}
+
+List<Object> toList(org.json.JSONArray arr) {
+    List<Object> list = new ArrayList<>();
+    for (int i = 0; i < arr.length(); i++) {
+        list.add(toValue(arr.get(i)));
+    }
+    return list;
+}
+
+Object toValue(Object value) {
+    if (value instanceof org.json.JSONObject) return toMap((org.json.JSONObject) value);
+    if (value instanceof org.json.JSONArray) return toList((org.json.JSONArray) value);
+    if (value == org.json.JSONObject.NULL) return null;
+    return value;
 }
 
 // 函数式接口（避免依赖java.util.function）
