@@ -390,7 +390,7 @@ class PunishRecord {
     String method;   // kick, mute, warn
     String content;  // f, 1d2h, 空
     String reason;
-    String status;   // 不合规, 已执行, 执行失败, 已撤销
+    String status;   // 不合规, 已执行, 执行失败, 部分失败, 已撤销
     String failDetail;
     long revokeTime;
     String revokeReason;
@@ -920,7 +920,7 @@ List<String> buildDetailHelp(int level, String cmd) {
             lines.add("> 参数");
             lines.add("- <记录ID>  要撤销的处罚记录ID，可通过 /h 查询获取");
             lines.add("- [撤销原因]  可选，撤销原因说明");
-            lines.add("! 仅可撤销\"已执行\"或\"执行失败\"的记录");
+            lines.add("! 仅可撤销\"已执行\"、\"执行失败\"或\"部分失败\"的记录");
             lines.add("! 撤销禁言时自动解禁，撤销kick f时自动移出黑名单");
             lines.add("> 示例");
             lines.add("~ /rp 5  → 撤销记录5");
@@ -938,7 +938,7 @@ List<String> buildDetailHelp(int level, String cmd) {
             lines.add("- 无参数  图片表格展示管理组全部处罚记录");
             lines.add("- 指定目标  文字汇总统计（次数、时长等）");
             lines.add("- 指定目标 -i  图片表格详情（含状态彩色标注）");
-            lines.add("! 状态颜色：绿色已执行 / 橙色已撤销 / 红色执行失败 / 灰色不合规");
+            lines.add("! 状态颜色：绿色已执行 / 橙色已撤销 / 红色执行失败 / 暗红部分失败 / 灰色不合规");
             lines.add("> 示例");
             lines.add("~ /h  → 显示管理组全部记录");
             lines.add("~ /h @某人  → 汇总统计");
@@ -1228,6 +1228,20 @@ void cmdPunish(int level, String sender, String group, String[] parts, Object ms
                 case "kick":
                     boolean toBlack = "f".equals(content);
                     kickGroup(gid, targetQQ, false);
+                    // 验证踢出是否成功：检查成员是否仍在群内
+                    boolean stillInGroup = false;
+                    List memberListAfterKick = getGroupMemberList(gid);
+                    if (memberListAfterKick != null) {
+                        for (Object m : memberListAfterKick) {
+                            if (m.uin != null && m.uin.equals(targetQQ)) {
+                                stillInGroup = true;
+                                break;
+                            }
+                        }
+                    }
+                    if (stillInGroup) {
+                        throw new RuntimeException("踢出失败：bot权限不足，成员仍在群内");
+                    }
                     if (toBlack) {
                         addToBlacklist(Long.parseLong(targetQQ), reason, mg.name);
                         sendGroupMsg(gid, "[atUin=" + targetQQ + "] 因「" + reason + "」被踢出并加入黑名单。");
@@ -1238,6 +1252,20 @@ void cmdPunish(int level, String sender, String group, String[] parts, Object ms
                 case "mute":
                     long sec = parseDurationSeconds(content);
                     shutUp(gid, targetQQ, sec);
+                    // 验证禁言是否成功：检查成员是否在禁言列表中
+                    boolean muteSuccess = false;
+                    List prohibitCheck = getProhibitList(gid);
+                    if (prohibitCheck != null) {
+                        for (Object p : prohibitCheck) {
+                            if (p.user != null && p.user.equals(targetQQ)) {
+                                muteSuccess = true;
+                                break;
+                            }
+                        }
+                    }
+                    if (!muteSuccess) {
+                        throw new RuntimeException("禁言失败：bot权限不足，成员未被禁言");
+                    }
                     sendGroupMsg(gid, "[atUin=" + targetQQ + "] 因「" + reason + "」被禁言 " + content + "。");
                     break;
                 case "warn":
@@ -1258,8 +1286,8 @@ void cmdPunish(int level, String sender, String group, String[] parts, Object ms
         r.status = "执行失败";
         r.failDetail = "失败群：" + String.join(",", failGroups);
     } else if (anyFail) {
-        r.status = "执行失败";
-        r.failDetail = "部分失败，失败群：" + String.join(",", failGroups);
+        r.status = "部分失败";
+        r.failDetail = "失败群：" + String.join(",", failGroups);
     } else {
         r.status = "已执行";
     }
@@ -1270,14 +1298,18 @@ void cmdPunish(int level, String sender, String group, String[] parts, Object ms
     if (anyFail && !anySuccess) {
         feedback.append("处罚执行失败，失败群：" + String.join(",", failGroups));
     } else if (anyFail) {
-        feedback.append("处罚部分执行失败，失败群：" + String.join(",", failGroups));
+        feedback.append("处罚部分失败，失败群：" + String.join(",", failGroups));
     } else {
         feedback.append("处罚已执行。");
     }
     sendGroupMsg(group, feedback.toString());
 
-    // 通知管理群
-    notifyAdminGroup(mg, "处罚「" + r.id + "」：" + sender + "在" + group + "内发起了对" + targetQQ + "的「" + r.describe() + "」处罚，原因：「" + reason + "」");
+    // 通知管理群（含执行结果）
+    String adminNotifyMsg = "处罚「" + r.id + "」：" + sender + "在" + group + "内发起了对" + targetQQ + "的「" + r.describe() + "」处罚，原因：「" + reason + "」，状态：" + r.status;
+    if (!r.failDetail.isEmpty()) {
+        adminNotifyMsg += "（" + r.failDetail + "）";
+    }
+    notifyAdminGroup(mg, adminNotifyMsg);
 
     saveAll();
 }
@@ -1368,11 +1400,11 @@ void cmdQuery(int level, String group, String[] parts, Object msgData) {
         // 生成表格图片发送
         sendPunishRecordTableImage(group, filtered);
     } else {
-        // 汇总统计（仅已执行和执行失败）
+        // 汇总统计（已执行、执行失败、部分失败）
         int totalPunish = 0, muteCount = 0, kickCount = 0;
         long muteTotalSec = 0;
         for (PunishRecord r : filtered) {
-            if (r.status.equals("已执行") || r.status.equals("执行失败")) {
+            if (r.status.equals("已执行") || r.status.equals("执行失败") || r.status.equals("部分失败")) {
                 totalPunish++;
                 if (r.method.equals("mute")) {
                     muteCount++;
@@ -1484,6 +1516,7 @@ void generatePunishRecordTableImage(List<PunishRecord> list, String outputPath) 
         if (st.equals("已执行")) statusColor = Color.parseColor("#2E7D32");
         else if (st.equals("已撤销")) statusColor = Color.parseColor("#F57F17");
         else if (st.equals("执行失败")) statusColor = Color.parseColor("#C62828");
+        else if (st.equals("部分失败")) statusColor = Color.parseColor("#B71C1C");
         else if (st.equals("不合规")) statusColor = Color.parseColor("#757575");
 
         String c = (r.content != null && !r.content.isEmpty()) ? r.content : "-";
@@ -1696,7 +1729,7 @@ void cmdRevoke(int level, String sender, String group, String[] parts) {
         sendGroupMsg(group, "记录不存在");
         return;
     }
-    if (!target.status.equals("已执行") && !target.status.equals("执行失败")) {
+    if (!target.status.equals("已执行") && !target.status.equals("执行失败") && !target.status.equals("部分失败")) {
         sendGroupMsg(group, "该记录状态为 " + target.status + "，不可撤销");
         return;
     }
@@ -1823,6 +1856,16 @@ void joinGroup(String group, String qq) {
                 return;
             }
             kickGroup(group, qq, false);
+            // 验证踢出是否成功：检查成员是否仍在群内
+            List memberListAfterKick = getGroupMemberList(group);
+            if (memberListAfterKick != null) {
+                for (Object m : memberListAfterKick) {
+                    if (m.uin != null && m.uin.equals(qq)) {
+                        log("error.log", "黑名单踢人失败：bot权限不足，成员 " + qq + " 仍在群内");
+                        return;
+                    }
+                }
+            }
             sendGroupMsg(group, "用户 " + qq + " 在管理组黑名单中，已自动移出。原因：" + matched.reason);
         } catch (Exception e) {
             log("error.log", "黑名单踢人失败：" + e.getMessage());
