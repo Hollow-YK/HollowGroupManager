@@ -32,7 +32,7 @@ String dataDirPath;
 
 Map<String, ManagementGroup> groups = new LinkedHashMap<>();
 List<PunishRecord> records = Collections.synchronizedList(new ArrayList<>());
-Map<String, Integer> permissions = new HashMap<>();          // qq -> level (1 或 -1)
+Map<String, Integer> permissions = new HashMap<>();
 List<BlacklistItem> blacklist = Collections.synchronizedList(new ArrayList<>());
 AtomicInteger nextPunishRecordId = new AtomicInteger(1);
 
@@ -40,6 +40,319 @@ boolean initialized = false;
 final Object initLock = new Object();
 
 SimpleDateFormat sdf = new SimpleDateFormat("yyyy-MM-dd HH:mm:ss");
+
+// ==================== JSON读写（使用org.json） ====================
+
+// ==================== 启动时配置与数据完整性检查 ====================
+
+void checkAndRepairConfig() {
+    File configFile = new File(pluginPath + "/config.properties");
+    boolean configNeedRepair = false;
+    Properties configProps = new Properties();
+
+    if (!configFile.exists()) {
+        log("info.log", "配置文件 config.properties 不存在，创建默认配置");
+        qqToast(2, "已创建默认配置");
+        configNeedRepair = true;
+    } else {
+        try {
+            FileReader reader = new FileReader(configFile);
+            configProps.load(reader);
+            reader.close();
+        } catch (Exception e) {
+            log("info.log", "配置文件读取失败(" + e.getMessage() + ")，备份后重建");
+            File bak = new File(pluginPath + "/config.properties.bak");
+            if (bak.exists()) bak.delete();
+            configFile.renameTo(bak);
+            qqToast(1, "配置已损坏，已备份重建");
+            configNeedRepair = true;
+        }
+    }
+
+    String wakeWordsVal = configProps.getProperty("wakeWords");
+    if (wakeWordsVal == null || wakeWordsVal.trim().isEmpty()) {
+        log("info.log", "配置项 wakeWords 无效，使用默认值 /,!,。");
+        wakeWordsVal = "/,!,。";
+        configNeedRepair = true;
+    }
+
+    String superAdminsVal = configProps.getProperty("superAdmins");
+    if (superAdminsVal != null && superAdminsVal.contains("你的QQ号")) {
+        log("info.log", "检测到旧版占位符 superAdmins=你的QQ号，已清空");
+        qqToast(0, "superAdmins占位符已清空");
+        superAdminsVal = "";
+        configNeedRepair = true;
+    }
+    if (superAdminsVal == null) {
+        superAdminsVal = "";
+        configNeedRepair = true;
+    }
+
+    String dataDirVal = configProps.getProperty("dataDir");
+    if (dataDirVal == null || dataDirVal.trim().isEmpty()) {
+        log("info.log", "配置项 dataDir 无效，使用默认值 data");
+        dataDirVal = "data";
+        configNeedRepair = true;
+    }
+
+    if (configNeedRepair) {
+        try {
+            PrintWriter out = new PrintWriter(new FileWriter(pluginPath + "/config.properties"));
+            out.println("# HollowGroupManager Configuration");
+            out.println("# Wake-up words, comma-separated");
+            out.println("wakeWords=" + wakeWordsVal.trim());
+            out.println("# Super admin QQ numbers, comma-separated");
+            out.println("superAdmins=" + superAdminsVal.trim());
+            out.println("# Data directory (relative to plugin path)");
+            out.println("dataDir=" + dataDirVal.trim());
+            out.close();
+        } catch (Exception e) {
+            log("error.log", "写入配置文件失败: " + e.getMessage());
+        }
+    }
+
+    wakeWords = new ArrayList<>(Arrays.asList(wakeWordsVal.trim().split(",")));
+
+    superAdmins = new HashSet<>();
+    if (!superAdminsVal.trim().isEmpty()) {
+        String[] parts = superAdminsVal.trim().split(",");
+        for (int i = 0; i < parts.length; i++) {
+            String trimmed = parts[i].trim();
+            if (!trimmed.isEmpty()) superAdmins.add(trimmed);
+        }
+    }
+
+    dataDirPath = pluginPath + "/" + dataDirVal.trim();
+
+    if (superAdmins.isEmpty()) {
+        log("info.log", "⚠ 未配置超级管理员QQ (superAdmins)，请编辑 config.properties 后重启插件");
+        qqToast(0, "未配置超级管理员");
+    }
+}
+
+void checkAndRepairDataFiles() {
+    checkGroupsFile();
+    checkRecordsFile();
+    checkPermissionsFile();
+    checkBlacklistFile();
+}
+
+// ---- 通用：读文件内容 ----
+String readFileContent(File file) {
+    try {
+        BufferedReader reader = new BufferedReader(new FileReader(file));
+        StringBuilder sb = new StringBuilder();
+        String line;
+        while ((line = reader.readLine()) != null) sb.append(line);
+        reader.close();
+        return sb.toString();
+    } catch (Exception e) {
+        return null;
+    }
+}
+
+// ---- 通用：创建空文件 ----
+void createEmptyFile(File file, boolean isList) {
+    try {
+        PrintWriter out = new PrintWriter(new FileWriter(file));
+        out.print(isList ? "[]" : "{}");
+        out.close();
+    } catch (Exception e) {}
+}
+
+// ---- 通用：备份并重建 ----
+void backupAndRecreate(File file, String filename, boolean isList, String toastMsg) {
+    File bak = new File(dataDirPath + "/" + filename + ".bak");
+    if (bak.exists()) bak.delete();
+    file.renameTo(bak);
+    qqToast(1, toastMsg);
+    createEmptyFile(file, isList);
+}
+
+// ==================== 各文件独立校验 ====================
+
+void checkGroupsFile() {
+    String filename = "groups.json";
+    File file = new File(dataDirPath + "/" + filename);
+
+    if (!file.exists()) {
+        log("info.log", filename + " 不存在，已创建");
+        qqToast(0, filename + "不存在，已创建");
+        createEmptyFile(file, true);
+        return;
+    }
+
+    String content = readFileContent(file);
+    if (content == null) {
+        log("info.log", filename + " 读取失败，备份后重建");
+        backupAndRecreate(file, filename, true, filename + "已损坏，已备份重建");
+        return;
+    }
+    if (content.trim().isEmpty()) {
+        log("info.log", filename + " 为空，已重建");
+        qqToast(0, filename + "为空，已重建");
+        createEmptyFile(file, true);
+        return;
+    }
+
+    // JSON 解析 + Schema 校验
+    try {
+        org.json.JSONArray arr = new org.json.JSONArray(content);
+        for (int i = 0; i < arr.length(); i++) {
+            org.json.JSONObject g = arr.getJSONObject(i);
+            g.getString("name");
+            g.getString("adminGroup");
+            org.json.JSONArray eg = g.getJSONArray("executionGroups");
+            for (int j = 0; j < eg.length(); j++) {
+                eg.getString(j);
+            }
+        }
+        log("info.log", filename + " 验证通过 (" + arr.length() + "个管理组)");
+    } catch (org.json.JSONException e) {
+        log("info.log", filename + " 校验失败(" + e.getMessage() + ")，保留原文件");
+    }
+}
+
+void checkRecordsFile() {
+    String filename = "records.json";
+    File file = new File(dataDirPath + "/" + filename);
+
+    if (!file.exists()) {
+        log("info.log", filename + " 不存在，已创建");
+        qqToast(0, filename + "不存在，已创建");
+        createEmptyFile(file, true);
+        return;
+    }
+
+    String content = readFileContent(file);
+    if (content == null) {
+        log("info.log", filename + " 读取失败，备份后重建");
+        backupAndRecreate(file, filename, true, filename + "已损坏，已备份重建");
+        return;
+    }
+    if (content.trim().isEmpty()) {
+        log("info.log", filename + " 为空，已重建");
+        qqToast(0, filename + "为空，已重建");
+        createEmptyFile(file, true);
+        return;
+    }
+
+    // JSON 解析 + Schema 校验
+    try {
+        org.json.JSONArray arr = new org.json.JSONArray(content);
+        for (int i = 0; i < arr.length(); i++) {
+            org.json.JSONObject r = arr.getJSONObject(i);
+            r.getInt("id");
+            r.getLong("sender");
+            r.getLong("time");
+            r.getString("fromGroup");
+            r.getLong("target");
+            r.getString("method");
+            r.getString("content");
+            r.getString("reason");
+            r.getString("status");
+            r.getString("failDetail");
+            r.getLong("revokeTime");
+            r.getString("revokeReason");
+        }
+        log("info.log", filename + " 验证通过 (" + arr.length() + "条记录)");
+    } catch (org.json.JSONException e) {
+        log("info.log", filename + " 校验失败(" + e.getMessage() + ")，保留原文件");
+    }
+}
+
+void checkPermissionsFile() {
+    String filename = "permissions.json";
+    File file = new File(dataDirPath + "/" + filename);
+
+    if (!file.exists()) {
+        log("info.log", filename + " 不存在，已创建");
+        qqToast(0, filename + "不存在，已创建");
+        createEmptyFile(file, false);
+        return;
+    }
+
+    String content = readFileContent(file);
+    if (content == null) {
+        log("info.log", filename + " 读取失败，备份后重建");
+        backupAndRecreate(file, filename, false, filename + "已损坏，已备份重建");
+        return;
+    }
+    if (content.trim().isEmpty()) {
+        log("info.log", filename + " 为空，已重建");
+        qqToast(0, filename + "为空，已重建");
+        createEmptyFile(file, false);
+        return;
+    }
+
+    // JSON 解析 + Schema 校验：key = QQ号, value = 数字(1或-1)
+    try {
+        org.json.JSONObject obj = new org.json.JSONObject(content);
+        java.util.Iterator<String> keys = obj.keys();
+        while (keys.hasNext()) {
+            String key = keys.next();
+            int val = obj.getInt(key);
+            if (val != 1 && val != -1) throw new org.json.JSONException(key + " 的值不是 1 或 -1");
+        }
+        log("info.log", filename + " 验证通过 (" + obj.length() + "条权限)");
+    } catch (org.json.JSONException e) {
+        log("info.log", filename + " 校验失败(" + e.getMessage() + ")，保留原文件");
+    }
+}
+
+void checkBlacklistFile() {
+    String filename = "blacklist.json";
+    File file = new File(dataDirPath + "/" + filename);
+
+    if (!file.exists()) {
+        log("info.log", filename + " 不存在，已创建");
+        qqToast(0, filename + "不存在，已创建");
+        createEmptyFile(file, true);
+        return;
+    }
+
+    String content = readFileContent(file);
+    if (content == null) {
+        log("info.log", filename + " 读取失败，备份后重建");
+        backupAndRecreate(file, filename, true, filename + "已损坏，已备份重建");
+        return;
+    }
+    if (content.trim().isEmpty()) {
+        log("info.log", filename + " 为空，已重建");
+        qqToast(0, filename + "为空，已重建");
+        createEmptyFile(file, true);
+        return;
+    }
+
+    // JSON 解析 + Schema 校验
+    try {
+        org.json.JSONArray arr = new org.json.JSONArray(content);
+        for (int i = 0; i < arr.length(); i++) {
+            org.json.JSONObject b = arr.getJSONObject(i);
+            b.getLong("qq");
+            b.getString("reason");
+            b.getLong("addTime");
+            b.getString("groupName");
+        }
+        log("info.log", filename + " 验证通过 (" + arr.length() + "条黑名单)");
+    } catch (org.json.JSONException e) {
+        log("info.log", filename + " 校验失败(" + e.getMessage() + ")，保留原文件");
+    }
+}
+
+// --- 执行检查 ---
+try { checkAndRepairConfig(); } catch (Exception e) {
+    log("error.log", "配置检查修复失败: " + e.getMessage());
+    wakeWords = new ArrayList<>(Arrays.asList("/", "!", "。"));
+    superAdmins = new HashSet<>();
+    dataDirPath = pluginPath + "/data";
+}
+
+try { new File(dataDirPath).mkdirs(); } catch (Exception e) {}
+
+try { checkAndRepairDataFiles(); } catch (Exception e) {
+    log("error.log", "数据文件检查修复失败: " + e.getMessage());
+}
 
 // ==================== 数据模型 ====================
 class ManagementGroup {
@@ -152,25 +465,8 @@ class BlacklistItem {
 
 // ==================== 初始化与数据持久化 ====================
 void init() {
-    // 读取配置
-    Properties props = new Properties();
-    try (FileReader reader = new FileReader(pluginPath + "/config.properties")) {
-        props.load(reader);
-    } catch (Exception e) {
-        log("error.log", "配置文件读取失败: " + e.getMessage());
-        wakeWords = new ArrayList<>(Arrays.asList("/", "!", "。"));
-        superAdmins = new HashSet<>(Arrays.asList("你的QQ号")); // 替换为实际
-        dataDirPath = pluginPath + "/data";
-        return;
-    }
-    String words = props.getProperty("wakeWords", "/,!,。");
-    wakeWords = new ArrayList<>(Arrays.asList(words.split(",")));
-    String admins = props.getProperty("superAdmins", "");
-    superAdmins = new HashSet<>(Arrays.asList(admins.split(",")));
-    dataDirPath = pluginPath + "/" + props.getProperty("dataDir", "data");
-
-    // 确保数据目录存在
-    new File(dataDirPath).mkdirs();
+    // 配置已在顶层代码中检查修复并设置到全局变量
+    // 数据文件也已在顶层代码中验证，确保是合法 JSON
 
     // 加载数据
     groups = loadMap(dataDirPath + "/groups.json", ManagementGroup::fromMap);
@@ -194,204 +490,190 @@ void saveAll() {
     saveList(dataDirPath + "/blacklist.json", blacklist, BlacklistItem::toMap);
 }
 
-// ==================== 简易JSON读写（仅支持基本类型、Map、List） ====================
-String escapeJson(String s) {
-    return s.replace("\\", "\\\\").replace("\"", "\\\"");
-}
-
-String unescapeJson(String s) {
-    return s.replace("\\\"", "\"").replace("\\\\", "\\");
-}
-
-String toJson(Object obj) {
-    if (obj == null) return "null";
-    if (obj instanceof String) return "\"" + escapeJson((String) obj) + "\"";
-    if (obj instanceof Number) return obj.toString();
-    if (obj instanceof Boolean) return obj.toString();
-    if (obj instanceof Map) {
-        Map<?, ?> map = (Map<?, ?>) obj;
-        StringBuilder sb = new StringBuilder("{");
-        boolean first = true;
-        for (Map.Entry<?, ?> entry : map.entrySet()) {
-            if (!first) sb.append(",");
-            sb.append(toJson(entry.getKey().toString())).append(":").append(toJson(entry.getValue()));
-            first = false;
-        }
-        sb.append("}");
-        return sb.toString();
-    }
-    if (obj instanceof List) {
-        List<?> list = (List<?>) obj;
-        StringBuilder sb = new StringBuilder("[");
-        boolean first = true;
-        for (Object item : list) {
-            if (!first) sb.append(",");
-            sb.append(toJson(item));
-            first = false;
-        }
-        sb.append("]");
-        return sb.toString();
-    }
-    return "\"" + escapeJson(obj.toString()) + "\"";
-}
-
-// 简单解析器（递归下降）
-Object parseJson(String json) {
-    json = json.trim();
-    if (json.isEmpty()) return null;
-    char first = json.charAt(0);
-    if (first == '{') {
-        Map<String, Object> map = new LinkedHashMap<>();
-        json = json.substring(1, json.length() - 1).trim();
-        while (!json.isEmpty()) {
-            int colon = findSplit(json, ':');
-            String key = (String) parseJson(json.substring(0, colon).trim());
-            json = json.substring(colon + 1).trim();
-            int comma = findSplit(json, ',');
-            String valStr = json.substring(0, comma).trim();
-            map.put(key, parseJson(valStr));
-            json = json.substring(comma).trim();
-            if (json.startsWith(",")) json = json.substring(1).trim();
-        }
-        return map;
-    } else if (first == '[') {
-        List<Object> list = new ArrayList<>();
-        json = json.substring(1, json.length() - 1).trim();
-        while (!json.isEmpty()) {
-            int comma = findSplit(json, ',');
-            String valStr = json.substring(0, comma).trim();
-            if (!valStr.isEmpty()) list.add(parseJson(valStr));
-            json = json.substring(comma).trim();
-            if (json.startsWith(",")) json = json.substring(1).trim();
-        }
-        return list;
-    } else if (first == '"') {
-        int end = json.indexOf('"', 1);
-        while (end != -1 && json.charAt(end - 1) == '\\') end = json.indexOf('"', end + 1);
-        if (end == -1) end = json.length() - 1;
-        return unescapeJson(json.substring(1, end));
-    } else {
-        try {
-            if (json.equals("true")) return true;
-            if (json.equals("false")) return false;
-            if (json.equals("null")) return null;
-            if (json.contains(".")) return Double.parseDouble(json);
-            return Long.parseLong(json);
-        } catch (Exception e) {
-            return json;
-        }
-    }
-}
-
-int findSplit(String json, char delimiter) {
-    int depth = 0;
-    boolean inString = false;
-    for (int i = 0; i < json.length(); i++) {
-        char c = json.charAt(i);
-        if (inString) {
-            if (c == '"' && json.charAt(i - 1) != '\\') inString = false;
-            continue;
-        }
-        if (c == '"') { inString = true; continue; }
-        if (c == '{' || c == '[') depth++;
-        else if (c == '}' || c == ']') depth--;
-        else if (c == delimiter && depth == 0) return i;
-    }
-    return json.length();
-}
-
 // 加载/保存集合
 <T> List<T> loadList(String path, Function<Map<String, Object>, T> mapper) {
     File file = new File(path);
     if (!file.exists()) return new ArrayList<>();
-    try (BufferedReader reader = new BufferedReader(new FileReader(file))) {
-        String content = readAll(reader);
-        Object parsed = parseJson(content);
-        if (parsed instanceof List) {
-            List<T> list = new ArrayList<>();
-            for (Object obj : (List) parsed) {
-                if (obj instanceof Map) list.add(mapper.apply((Map) obj));
-            }
-            return list;
+    try {
+        org.json.JSONArray arr = new org.json.JSONArray(readFileContent(file));
+        List<T> list = new ArrayList<>();
+        for (int i = 0; i < arr.length(); i++) {
+            list.add(mapper.apply(toMap(arr.getJSONObject(i))));
         }
+        return list;
     } catch (Exception e) {
         log("error.log", "加载数据失败 " + path + ": " + e.getMessage());
+        // 尝试从 .tmp 恢复
+        File tmpFile = new File(path + ".tmp");
+        if (tmpFile.exists()) {
+            try {
+                org.json.JSONArray arr = new org.json.JSONArray(readFileContent(tmpFile));
+                List<T> list = new ArrayList<>();
+                for (int i = 0; i < arr.length(); i++) {
+                    list.add(mapper.apply(toMap(arr.getJSONObject(i))));
+                }
+                log("info.log", "从 .tmp 恢复数据成功 " + path);
+                tmpFile.renameTo(file);
+                return list;
+            } catch (Exception e2) {
+                log("error.log", "从 .tmp 恢复数据失败 " + path + ": " + e2.getMessage());
+            }
+        }
     }
     return new ArrayList<>();
 }
 
 <T> void saveList(String path, List<T> list, Function<T, Map<String, Object>> mapper) {
-    List<Object> jsonList = new ArrayList<>();
-    for (T item : list) jsonList.add(mapper.apply(item));
-    try (PrintWriter out = new PrintWriter(new FileWriter(path))) {
-        out.print(toJson(jsonList));
+    org.json.JSONArray arr = new org.json.JSONArray();
+    for (T item : list) arr.put(new org.json.JSONObject(mapper.apply(item)));
+    String tmpPath = path + ".tmp";
+    try (PrintWriter out = new PrintWriter(new FileWriter(tmpPath))) {
+        out.print(arr.toString());
     } catch (Exception e) {
         log("error.log", "保存数据失败 " + path + ": " + e.getMessage());
+        new File(tmpPath).delete();
+        return;
+    }
+    File tmpFile = new File(tmpPath);
+    File target = new File(path);
+    if (target.exists()) target.delete();
+    if (!tmpFile.renameTo(target)) {
+        log("error.log", "保存数据失败(rename) " + path);
     }
 }
 
 Map<String, ManagementGroup> loadMap(String path, Function<Map<String, Object>, ManagementGroup> mapper) {
     File file = new File(path);
     if (!file.exists()) return new LinkedHashMap<>();
-    try (BufferedReader reader = new BufferedReader(new FileReader(file))) {
-        Object parsed = parseJson(readAll(reader));
-        if (parsed instanceof List) {
-            Map<String, ManagementGroup> map = new LinkedHashMap<>();
-            for (Object obj : (List) parsed) {
-                if (obj instanceof Map) {
-                    ManagementGroup g = mapper.apply((Map) obj);
-                    map.put(g.name, g);
-                }
-            }
-            return map;
+    try {
+        org.json.JSONArray arr = new org.json.JSONArray(readFileContent(file));
+        Map<String, ManagementGroup> map = new LinkedHashMap<>();
+        for (int i = 0; i < arr.length(); i++) {
+            ManagementGroup g = mapper.apply(toMap(arr.getJSONObject(i)));
+            map.put(g.name, g);
         }
+        return map;
     } catch (Exception e) {
         log("error.log", "加载管理组失败: " + e.getMessage());
+        // 尝试从 .tmp 恢复
+        File tmpFile = new File(path + ".tmp");
+        if (tmpFile.exists()) {
+            try {
+                org.json.JSONArray arr = new org.json.JSONArray(readFileContent(tmpFile));
+                Map<String, ManagementGroup> map = new LinkedHashMap<>();
+                for (int i = 0; i < arr.length(); i++) {
+                    ManagementGroup g = mapper.apply(toMap(arr.getJSONObject(i)));
+                    map.put(g.name, g);
+                }
+                log("info.log", "从 .tmp 恢复管理组成功 " + path);
+                tmpFile.renameTo(file);
+                return map;
+            } catch (Exception e2) {
+                log("error.log", "从 .tmp 恢复管理组失败 " + path + ": " + e2.getMessage());
+            }
+        }
     }
     return new LinkedHashMap<>();
 }
 
 void saveMap(String path, Map<String, ManagementGroup> map, Function<ManagementGroup, Map<String, Object>> mapper) {
-    List<Object> list = new ArrayList<>();
-    for (ManagementGroup g : map.values()) list.add(mapper.apply(g));
-    try (PrintWriter out = new PrintWriter(new FileWriter(path))) {
-        out.print(toJson(list));
+    org.json.JSONArray arr = new org.json.JSONArray();
+    for (ManagementGroup g : map.values()) arr.put(new org.json.JSONObject(mapper.apply(g)));
+    String tmpPath = path + ".tmp";
+    try (PrintWriter out = new PrintWriter(new FileWriter(tmpPath))) {
+        out.print(arr.toString());
     } catch (Exception e) {
         log("error.log", "保存管理组失败: " + e.getMessage());
+        new File(tmpPath).delete();
+        return;
+    }
+    File tmpFile = new File(tmpPath);
+    File target = new File(path);
+    if (target.exists()) target.delete();
+    if (!tmpFile.renameTo(target)) {
+        log("error.log", "保存管理组失败(rename) " + path);
     }
 }
 
 Map<String, Integer> loadSimpleMap(String path) {
     File file = new File(path);
     if (!file.exists()) return new HashMap<>();
-    try (BufferedReader reader = new BufferedReader(new FileReader(file))) {
-        Object parsed = parseJson(readAll(reader));
-        if (parsed instanceof Map) {
-            Map<String, Integer> map = new HashMap<>();
-            for (Map.Entry<?, ?> e : ((Map<?, ?>) parsed).entrySet()) {
-                map.put(e.getKey().toString(), ((Number) e.getValue()).intValue());
-            }
-            return map;
+    try {
+        org.json.JSONObject obj = new org.json.JSONObject(readFileContent(file));
+        Map<String, Integer> map = new HashMap<>();
+        java.util.Iterator<String> keys = obj.keys();
+        while (keys.hasNext()) {
+            String key = keys.next();
+            map.put(key, obj.getInt(key));
         }
+        return map;
     } catch (Exception e) {
         log("error.log", "加载权限失败: " + e.getMessage());
+        // 尝试从 .tmp 恢复
+        File tmpFile = new File(path + ".tmp");
+        if (tmpFile.exists()) {
+            try {
+                org.json.JSONObject obj = new org.json.JSONObject(readFileContent(tmpFile));
+                Map<String, Integer> map = new HashMap<>();
+                java.util.Iterator<String> keys = obj.keys();
+                while (keys.hasNext()) {
+                    String key = keys.next();
+                    map.put(key, obj.getInt(key));
+                }
+                log("info.log", "从 .tmp 恢复权限成功 " + path);
+                tmpFile.renameTo(file);
+                return map;
+            } catch (Exception e2) {
+                log("error.log", "从 .tmp 恢复权限失败 " + path + ": " + e2.getMessage());
+            }
+        }
     }
     return new HashMap<>();
 }
 
 void saveSimpleMap(String path, Map<String, Integer> map) {
-    try (PrintWriter out = new PrintWriter(new FileWriter(path))) {
-        out.print(toJson(map));
+    org.json.JSONObject obj = new org.json.JSONObject(map);
+    String tmpPath = path + ".tmp";
+    try (PrintWriter out = new PrintWriter(new FileWriter(tmpPath))) {
+        out.print(obj.toString());
     } catch (Exception e) {
         log("error.log", "保存权限失败: " + e.getMessage());
+        new File(tmpPath).delete();
+        return;
+    }
+    File tmpFile = new File(tmpPath);
+    File target = new File(path);
+    if (target.exists()) target.delete();
+    if (!tmpFile.renameTo(target)) {
+        log("error.log", "保存权限失败(rename) " + path);
     }
 }
 
-String readAll(BufferedReader reader) throws IOException {
-    StringBuilder sb = new StringBuilder();
-    String line;
-    while ((line = reader.readLine()) != null) sb.append(line);
-    return sb.toString();
+// ==================== org.json → Map/List 转换辅助 ====================
+// 将 org.json.JSONObject 递归转换为 Map<String, Object>，保证与 fromMap 兼容
+Map<String, Object> toMap(org.json.JSONObject obj) {
+    Map<String, Object> map = new LinkedHashMap<>();
+    java.util.Iterator<String> keys = obj.keys();
+    while (keys.hasNext()) {
+        String key = keys.next();
+        map.put(key, toValue(obj.get(key)));
+    }
+    return map;
+}
+
+List<Object> toList(org.json.JSONArray arr) {
+    List<Object> list = new ArrayList<>();
+    for (int i = 0; i < arr.length(); i++) {
+        list.add(toValue(arr.get(i)));
+    }
+    return list;
+}
+
+Object toValue(Object value) {
+    if (value instanceof org.json.JSONObject) return toMap((org.json.JSONObject) value);
+    if (value instanceof org.json.JSONArray) return toList((org.json.JSONArray) value);
+    if (value == org.json.JSONObject.NULL) return null;
+    return value;
 }
 
 // 函数式接口（避免依赖java.util.function）
