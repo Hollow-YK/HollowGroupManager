@@ -32,6 +32,7 @@ String dataDirPath;
 
 Map<String, ManagementGroup> groups = new LinkedHashMap<>();
 List<PunishRecord> records = Collections.synchronizedList(new ArrayList<>());
+Map<Integer, PunishRecord> recordsById = Collections.synchronizedMap(new LinkedHashMap<>());
 Map<String, Integer> permissions = new HashMap<>();
 List<BlacklistItem> blacklist = Collections.synchronizedList(new ArrayList<>());
 AtomicInteger nextPunishRecordId = new AtomicInteger(1);
@@ -474,9 +475,10 @@ void init() {
     permissions = loadSimpleMap(dataDirPath + "/permissions.json");
     blacklist = Collections.synchronizedList(loadList(dataDirPath + "/blacklist.json", BlacklistItem::fromMap));
 
-    // 计算下一个记录ID
+    // 构建ID索引并计算下一个记录ID
     int maxId = 0;
     for (PunishRecord r : records) {
+        recordsById.put(r.id, r);
         if (r.id > maxId) maxId = r.id;
     }
     nextPunishRecordId.set(maxId + 1);
@@ -1013,6 +1015,7 @@ PunishRecord createPunishRecord(String sender, String fromGroup, long target, St
     r.failDetail = "";
     r.revokeReason = "";
     records.add(r);
+    recordsById.put(r.id, r);
     return r;
 }
 
@@ -1389,13 +1392,7 @@ void cmdRevoke(int level, String sender, String group, String[] parts) {
         sendGroupMsg(group, "记录ID必须为数字");
         return;
     }
-    PunishRecord target = null;
-    for (PunishRecord r : records) {
-        if (r.id == recordId) {
-            target = r;
-            break;
-        }
-    }
+    PunishRecord target = recordsById.get(recordId);
     if (target == null) {
         sendGroupMsg(group, "记录不存在");
         return;
