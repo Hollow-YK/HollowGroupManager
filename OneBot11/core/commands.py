@@ -153,17 +153,9 @@ class CommandHandler:
         try:
             gid = int(group_id)
             uid = int(user_id)
-            if not await self.api.is_member_in_group(gid, uid):
-                logger.info(f"黑名单成员 {user_id} 已不在群 {group_id}")
-                return
-
             ok = await self.api.set_group_kick(gid, uid, reject_add_request=False)
             if not ok:
                 logger.error(f"黑名单踢人失败: {user_id}")
-                return
-
-            if await self.api.is_member_in_group(gid, uid):
-                logger.error(f"黑名单踢人失败(bot权限不足): {user_id}")
                 return
 
             await self.api.send_group_msg(gid,
@@ -435,8 +427,6 @@ class CommandHandler:
                                                        content == "f")
                     if not ok:
                         raise RuntimeError("踢出返回失败")
-                    if await self.api.is_member_in_group(eg_int, tid_int):
-                        raise RuntimeError("踢出失败：bot权限不足")
                     if content == "f":
                         self._blacklist_add(tid_int, reason, mg.name)
                     any_ok = True
