@@ -134,7 +134,7 @@ class OneBotWS:
                 continue
 
             if "post_type" in msg:
-                await self._dispatch_event(msg)
+                asyncio.create_task(self._dispatch_event(msg))
 
             elif "action" in msg:
                 # API 调用（反向模式下 OneBot 发给我们）
