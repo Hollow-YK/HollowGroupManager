@@ -86,7 +86,7 @@ class DataManager:
     def _save_models(self, filename: str, models: list):
         """pydantic 模型列表 → JSON 文件"""
         self._write_json(filename,
-                         [m.model_dump(by_alias=True, exclude_unset=True) for m in models])
+                         [m.model_dump(mode="json", by_alias=True, exclude_unset=True) for m in models])
 
     def _save_dict(self, filename: str, data: dict):
         self._write_json(filename, data)
@@ -107,7 +107,7 @@ class DataManager:
 
     def save_groups(self, groups: dict[str, ManagementGroup]):
         self._write_json("groups.json",
-                         [g.model_dump(by_alias=True) for g in groups.values()])
+                         [g.model_dump(mode="json", by_alias=True) for g in groups.values()])
 
     # ==================== 处罚记录 ====================
 
