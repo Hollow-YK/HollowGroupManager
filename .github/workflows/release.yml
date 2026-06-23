@@ -135,13 +135,13 @@ jobs:
       - name: Create OneBot11 release archive
         run: |
           mkdir -p dist/OneBot11
-          cp OneBot11/main.py           dist/OneBot11/
-          cp OneBot11/requirements.txt  dist/OneBot11/
-          cp OneBot11/README.md         dist/OneBot11/
-          cp OneBot11/LICENSE           dist/OneBot11/
-          cp -r OneBot11/bot            dist/OneBot11/
-          cp -r OneBot11/core           dist/OneBot11/
-          find dist/OneBot11 -type d -name __pycache__ -exec rm -rf {} + 2>/dev/null || true
+          cp OneBot11/main.py           dist/HollowGroupManager/
+          cp OneBot11/requirements.txt  dist/HollowGroupManager/
+          cp OneBot11/README.md         dist/HollowGroupManager/
+          cp OneBot11/LICENSE           dist/HollowGroupManager/
+          cp -r OneBot11/bot            dist/HollowGroupManager/
+          cp -r OneBot11/core           dist/HollowGroupManager/
+          find dist/HollowGroupManager -type d -name __pycache__ -exec rm -rf {} + 2>/dev/null || true
           cd dist
           zip -r "../HollowGroupManager_OneBot11-${{ steps.meta.outputs.version }}.zip" OneBot11
 
