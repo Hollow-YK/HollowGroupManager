@@ -10,7 +10,7 @@ permissions:
 
 env:
   # 版本目录列表（硬编码），Extract update logs 会遍历这些目录
-  EDITIONS: 'QFun'
+  EDITIONS: 'QFun OneBot11'
 
 jobs:
   release:
@@ -121,7 +121,7 @@ jobs:
           echo "Final release body:"
           cat /tmp/release_body.md
 
-      - name: Create release archive
+      - name: Create QFun release archive
         run: |
           mkdir -p dist/多群管理Bot
           cp QFun/main.java       dist/多群管理Bot/
@@ -130,12 +130,27 @@ jobs:
           cp QFun/desc.txt        dist/多群管理Bot/
           cp QFun/config.properties dist/多群管理Bot/
           cd dist
-          zip -r "../HollowGroupManager_QF-${{ steps.meta.outputs.version }}.zip" 多群管理Bot
+          zip -r "../HollowGroupManager_QFun-${{ steps.meta.outputs.version }}.zip" 多群管理Bot
+
+      - name: Create OneBot11 release archive
+        run: |
+          mkdir -p dist/OneBot11
+          cp OneBot11/main.py           dist/OneBot11/
+          cp OneBot11/requirements.txt  dist/OneBot11/
+          cp OneBot11/README.md         dist/OneBot11/
+          cp OneBot11/LICENSE           dist/OneBot11/
+          cp -r OneBot11/bot            dist/OneBot11/
+          cp -r OneBot11/core           dist/OneBot11/
+          find dist/OneBot11 -type d -name __pycache__ -exec rm -rf {} + 2>/dev/null || true
+          cd dist
+          zip -r "../HollowGroupManager_OneBot11-${{ steps.meta.outputs.version }}.zip" OneBot11
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           name: V${{ steps.meta.outputs.version }}
           body_path: /tmp/release_body.md
-          files: HollowGroupManager_QF-${{ steps.meta.outputs.version }}.zip
+          files: |
+            HollowGroupManager_QFun-${{ steps.meta.outputs.version }}.zip
+            HollowGroupManager_OneBot11-${{ steps.meta.outputs.version }}.zip
           prerelease: ${{ steps.meta.outputs.prerelease }}
