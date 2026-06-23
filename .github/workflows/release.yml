@@ -130,7 +130,7 @@ jobs:
           cp QFun/desc.txt        dist/多群管理Bot/
           cp QFun/config.properties dist/多群管理Bot/
           cd dist
-          zip -r "../HollowGroupManager_QF-${{ steps.meta.outputs.version }}.zip" 多群管理Bot
+          zip -r "../HollowGroupManager_QFun-${{ steps.meta.outputs.version }}.zip" 多群管理Bot
 
       - name: Create OneBot11 release archive
         run: |
@@ -143,7 +143,7 @@ jobs:
           cp -r OneBot11/core           dist/OneBot11/
           find dist/OneBot11 -type d -name __pycache__ -exec rm -rf {} + 2>/dev/null || true
           cd dist
-          zip -r "../HollowGroupManager_OB-${{ steps.meta.outputs.version }}.zip" OneBot11
+          zip -r "../HollowGroupManager_OneBot11-${{ steps.meta.outputs.version }}.zip" OneBot11
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
@@ -151,6 +151,6 @@ jobs:
           name: V${{ steps.meta.outputs.version }}
           body_path: /tmp/release_body.md
           files: |
-            HollowGroupManager_QF-${{ steps.meta.outputs.version }}.zip
-            HollowGroupManager_OB-${{ steps.meta.outputs.version }}.zip
+            HollowGroupManager_QFun-${{ steps.meta.outputs.version }}.zip
+            HollowGroupManager_OneBot11-${{ steps.meta.outputs.version }}.zip
           prerelease: ${{ steps.meta.outputs.prerelease }}
