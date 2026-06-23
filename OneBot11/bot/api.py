@@ -65,7 +65,8 @@ class OneBotAPI:
                         return None
                     result = await resp.json()
                     if result.get("status") == "ok":
-                        return result.get("data")
+                        data = result.get("data")
+                        return data if data is not None else True
                     elif result.get("status") == "async":
                         logger.info(f"[API] {action} 异步调用已接受")
                         return True
@@ -93,7 +94,8 @@ class OneBotAPI:
             await self._ws_send(json.dumps(payload, ensure_ascii=False))
             result = await asyncio.wait_for(future, timeout=10)
             if result.get("status") == "ok":
-                return result.get("data")
+                data = result.get("data")
+                return data if data is not None else True  # data=null → 成功但无返回数据
             else:
                 logger.warning(f"[API-WS] {action} 失败: {result}")
                 return None

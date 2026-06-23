@@ -445,10 +445,6 @@ class CommandHandler:
                     ok = await self.api.set_group_ban(eg_int, tid_int, sec)
                     if not ok:
                         raise RuntimeError("禁言返回失败")
-                    # 验证
-                    muted = await self.api.get_muted_members(eg_int)
-                    if not any(mm["user_id"] == tid_int for mm in muted):
-                        raise RuntimeError("禁言失败：bot权限不足")
                     any_ok = True
                 else:
                     any_ok = True
@@ -515,9 +511,6 @@ class CommandHandler:
                 try:
                     if not await self.api.is_member_in_group(eg_int, tid_int):
                         skip.append(f"{eg}(成员不存在)"); continue
-                    muted = await self.api.get_muted_members(eg_int)
-                    if not any(mm["user_id"] == tid_int for mm in muted):
-                        skip.append(f"{eg}(未禁言)"); continue
                     ok = await self.api.set_group_ban(eg_int, tid_int, 0)
                     if ok:
                         any_ok = True
