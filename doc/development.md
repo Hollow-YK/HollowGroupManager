@@ -31,8 +31,18 @@ HollowGroupManager/
 │   │   ├── models.py              # Pydantic 数据模型
 │   │   ├── data_manager.py        # JSON 持久化
 │   │   ├── commands.py            # 指令实现
-│   │   └── render.py              # 图片生成
+│   │   └── render.py              # 图片生成（Pillow）
+│   ├── tools/                     # 独立工具
+│   │   └── migrate.py             # 旧版数据迁移
 │   ├── data/                      # 运行时数据
+│   │   ├── command.json           # 全局命令配置
+│   │   └── <配置名>/              # 各配置独立目录
+│   │       ├── groups.json        # 通知群 + 执行群
+│   │       ├── command.json       # 命令覆盖（可选）
+│   │       ├── permissions.json   # 权限映射
+│   │       └── punish/            # 处罚子系统
+│   │           ├── records.json
+│   │           └── blacklist.json
 │   └── logs/                      # 日志文件（时间命名）
 ├── doc/                           # 项目文档
 │   ├── comparison.md              # 两版详细对比
@@ -53,46 +63,54 @@ HollowGroupManager/
 
 ```
 QQ消息 → 框架/协议层 → 消息处理器
-  → 唤醒词匹配（config 中的 wakeWords / wake_words）
-  → 权限检查（superAdmins + permissions.json）
-  → 指令路由（/p, /h, /rp, /a, /group, /help）
+  → 唤醒词匹配（config.json 中的 wake_words）
+  → 命令解析（别名 → 内部名，通过 command.json）
+  → 权限检查（super_admins + 各配置 permissions.json + command.min_level）
+  → 指令路由（/help, /p, /rp, /h, /a, /config）
   → 业务逻辑
-  → saveAll() / dm.save_all() 持久化到 data/*.json
+  → dm.save_config() 持久化到 data/<配置名>/
 ```
 
-### 管理组架构
+### 多配置架构
 
 ```
-管理群（adminGroup）
-  └── 执行群A ── 同步执行处罚/撤销/通报
-  └── 执行群B ── 同步执行处罚/撤销/通报
-  └── 执行群C ── 同步执行处罚/撤销/通报
+配置A（全局默认继承）
+  ├── 通知群 ── 接收执行通报
+  ├── 执行群1, 执行群2 ── 同步执行处罚
+  └── punish/ ── 独立处罚记录 + 黑名单
+
+配置B（覆盖部分命令）
+  ├── 通知群（可与 A 重叠）
+  ├── 执行群3
+  └── punish/ ── 独立处罚记录 + 黑名单
 ```
 
-- 管理群发起的处罚自动同步到所有执行群
-- 成员不在某执行群时静默跳过，不视为失败
-- 黑名单跨所有执行群共享
+- 一个群可属于多个配置
+- 各配置处罚记录、黑名单、权限完全独立
+- 命令配置未设置时自动继承全局 `data/command.json`
+- `/help` 按配置分组显示，标注各配置权限
 
 ### 权限模型
 
 | 等级 | 角色 | 配置方式 | 权限 |
 | --- | --- | --- | --- |
 | 0 | 超级管理员 | 配置文件（`superAdmins` / `super_admins`） | 全部指令 |
-| 1 | 管理员 | `/a` 指令设置 | 处罚、查询、撤销 |
-| -1 | 普通成员 | 默认 | 不响应指令 |
+| ≥1 | 管理员 | `/a` 指令设置 | 数字越小权限越高，受 `command.json` `min_level` 限制 |
+| -1 | 普通成员 | 默认 | 仅 `min_level: -1` 的命令 |
 
 ### 数据文件
 
-四个 JSON 文件，两版格式兼容：
+每个配置独立存储：
 
-| 文件 | 内容 | 模型类（QFun → OneBot11） |
+| 文件 | 位置 | 内容 |
 | --- | --- | --- |
-| `groups.json` | 管理组配置 | `ManagementGroup` → `ManagementGroup` |
-| `records.json` | 处罚记录 | `PunishRecord` → `PunishRecord` |
-| `permissions.json` | 权限映射（QQ→等级） | `Map<String, Integer>` → `Dict[str, int]` |
-| `blacklist.json` | 黑名单 | `BlacklistItem` → `BlacklistItem` |
+| `groups.json` | 配置根 | 通知群 + 执行群（`ConfigInfo`） |
+| `command.json` | 配置根（可选）+ 全局 | 命令启用/名称/权限（`CommandConfig`） |
+| `permissions.json` | 配置根 | 权限映射（`Dict[str, int]`） |
+| `records.json` | `punish/` | 处罚记录（`PunishRecord`） |
+| `blacklist.json` | `punish/` | 黑名单（`BlacklistItem`） |
 
-所有数据文件使用 `.tmp` 原子写入：先写 `<file>.tmp`，成功后再 `rename` 覆盖目标文件。加载失败时自动尝试 `.tmp` 恢复。
+所有数据文件使用 `.tmp` 原子写入，加载失败时自动尝试 `.tmp` 恢复。
 
 ---
 
@@ -219,7 +237,7 @@ main.py                    # 入口：加载配置，初始化模块，启动事
   ├── bot/handler.py       # 通信层：事件 → CommandHandler 分发
   └── core/                # 业务层
       ├── commands.py      # 所有指令实现
-      ├── models.py        # Pydantic 数据模型
+      ├── models.py        # Pydantic 数据模型 + ConfigState
       ├── data_manager.py  # JSON 持久化
       └── render.py        # Pillow 图片渲染
 ```
@@ -229,14 +247,14 @@ main.py                    # 入口：加载配置，初始化模块，启动事
 ```python
 async def main():
     config = load_config()                     # 加载/生成 config.json
-    setup_logging(config.log)                  # 按配置重建日志（控制台 + 可选文件）
+    setup_logging(config.log)                  # 按配置重建日志
     api = OneBotAPI(config)                    # 初始化 HTTP API
     dm = DataManager(config.data_dir)          # 初始化数据管理器
     cmd = CommandHandler(api, dm, ...)         # 初始化指令处理器
-    cmd.load()                                 # 加载数据文件
+    cmd.load()                                 # 加载全局 command.json + 各配置数据
 
     ws = OneBotWS(config, handler)             # 初始化 WebSocket
-    await ws.start()                           # 启动 WS（正向连接或反向监听）
+    await ws.start()                           # 启动 WS
 ```
 
 ### 数据模型（Pydantic）
@@ -292,39 +310,37 @@ class DataManager:
 
 1. 在 `core/commands.py` 的 `handle_message()` 中添加分发分支
 2. 实现 `_xxx()` 方法
-3. 在 `_build_overview_lines()` 和 `_build_detail_lines()` 中添加帮助条目（使用 `{w}` 占位符）
+3. 在 `CommandConfig.defaults()` 中添加命令配置
+4. 在 `_CMD_DESC` / `_CMD_FORMAT` / `_CMD_EXAMPLES` / `_CMD_DETAIL` 中添加帮助条目
 
 ### 添加新数据持久化（OneBot11）
 
 1. 在 `core/models.py` 中定义 Pydantic 模型
-2. 在 `core/data_manager.py` 中添加 `load_xxx()` / `save_xxx()` 方法
-3. 在 `DataManager.check_all()` 中添加启动校验
+2. 在 `core/data_manager.py` 中添加 `load_config_xxx()` / `save_config_xxx()` 方法
+3. 在 `DataManager.save_config()` 中调用新方法
 
 ### 添加新配置项（OneBot11）
 
 1. 在 `main.py` 的 `load_config()` 默认值模板中添加字段
-2. 在 `main()` 中读取配置段，传递给对应模块
-3. 在对应模块中读取配置
+2. 在 `main()` 中读取配置段
 
-**示例：日志配置**
+### 命令配置（command.json）
 
-```python
-# 1. main.py load_config() 默认值模板
-"log": {
-    "log_to_file": True,
-    "log_level": "INFO",
-    "log_dir": "logs",
-},
+全局 `data/command.json` 定义默认命令行为。各配置覆盖项写入 `data/<配置>/command.json`。
 
-# 2. main() 中读取并应用
-log_cfg = cfg.get("log", {})
-setup_logging(log_cfg)
-
-# 3. setup_logging() 使用配置
-log_level = getattr(logging, log_cfg.get("log_level", "INFO").upper(), logging.INFO)
-log_to_file = log_cfg.get("log_to_file", True)
-log_dir = log_cfg.get("log_dir", "logs")
+```json
+{
+  "commands": {
+    "punish_do": {
+      "enabled": true,
+      "names": ["p", "punish"],
+      "min_level": 1
+    }
+  }
+}
 ```
+
+`names` 支持多个命令名指向同一功能；`min_level` 控制所需最低权限等级；`sub` 支持递归子命令配置。
 
 ### WS Universal 协议
 
