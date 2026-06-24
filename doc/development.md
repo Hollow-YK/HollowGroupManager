@@ -32,7 +32,8 @@ HollowGroupManager/
 │   │   ├── data_manager.py        # JSON 持久化
 │   │   ├── commands.py            # 指令实现
 │   │   └── render.py              # 图片生成
-│   └── data/                      # 运行时数据
+│   ├── data/                      # 运行时数据
+│   └── logs/                      # 日志文件（时间命名）
 ├── doc/                           # 项目文档
 │   ├── comparison.md              # 两版详细对比
 │   └── development.md             # 本文档
@@ -228,6 +229,7 @@ main.py                    # 入口：加载配置，初始化模块，启动事
 ```python
 async def main():
     config = load_config()                     # 加载/生成 config.json
+    setup_logging(config.log)                  # 按配置重建日志（控制台 + 可选文件）
     api = OneBotAPI(config)                    # 初始化 HTTP API
     dm = DataManager(config.data_dir)          # 初始化数据管理器
     cmd = CommandHandler(api, dm, ...)         # 初始化指令处理器
@@ -300,8 +302,29 @@ class DataManager:
 
 ### 添加新配置项（OneBot11）
 
-1. 在 `config.json` 默认值模板中添加字段（`main.py` 的 `_default_config`）
-2. 在对应模块中读取配置
+1. 在 `main.py` 的 `load_config()` 默认值模板中添加字段
+2. 在 `main()` 中读取配置段，传递给对应模块
+3. 在对应模块中读取配置
+
+**示例：日志配置**
+
+```python
+# 1. main.py load_config() 默认值模板
+"log": {
+    "log_to_file": True,
+    "log_level": "INFO",
+    "log_dir": "logs",
+},
+
+# 2. main() 中读取并应用
+log_cfg = cfg.get("log", {})
+setup_logging(log_cfg)
+
+# 3. setup_logging() 使用配置
+log_level = getattr(logging, log_cfg.get("log_level", "INFO").upper(), logging.INFO)
+log_to_file = log_cfg.get("log_to_file", True)
+log_dir = log_cfg.get("log_dir", "logs")
+```
 
 ### WS Universal 协议
 

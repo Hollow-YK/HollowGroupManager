@@ -305,6 +305,11 @@ dataDir=data
   },
   "render": {
     "enabled": true
+  },
+  "log": {
+    "log_to_file": true,
+    "log_level": "INFO",
+    "log_dir": "logs"
   }
 }
 ```
@@ -320,6 +325,9 @@ dataDir=data
 | `plugin.super_admins` | 超管 QQ 数组 |
 | `plugin.data_dir` | 数据目录 |
 | `render.enabled` | 图片渲染开关 |
+| `log.log_to_file` | 是否输出日志到文件 |
+| `log.log_level` | 日志等级（DEBUG / INFO / WARNING / ERROR） |
+| `log.log_dir` | 日志目录，默认 `logs` |
 
 ## 共享设计
 
