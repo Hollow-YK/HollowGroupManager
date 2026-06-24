@@ -2,7 +2,7 @@
 数据持久化 — JSON 文件读写，.tmp 原子写入，.bak 备份恢复。
 序列化/反序列化委托给 pydantic。
 
-多配置架构：每个配置一个子目录，包含独立的 4 个 JSON 文件。
+多配置架构：每个配置一个子目录，包含独立的 5 个 JSON 文件。
 """
 import json
 import logging
@@ -12,7 +12,7 @@ from typing import TypeVar
 
 from pydantic import BaseModel, TypeAdapter
 
-from .models import ConfigInfo, PunishRecord, BlacklistItem
+from .models import ConfigInfo, CommandConfig, PunishRecord, BlacklistItem
 
 T = TypeVar("T", bound=BaseModel)
 logger = logging.getLogger("Hollow.Data")
@@ -176,7 +176,7 @@ class DataManager:
             for k, v in data.items():
                 try:
                     level = int(v)
-                    if level in (1, -1):
+                    if level >= 1 or level == -1:
                         result[str(k)] = level
                 except (ValueError, TypeError):
                     pass
@@ -198,11 +198,49 @@ class DataManager:
         p = self._config_dir(name) / "blacklist.json"
         self._save_models_file(p, blacklist)
 
+    # ==================== 全局 command.json（data/command.json） ====================
+
+    def load_global_commands(self) -> CommandConfig:
+        """加载全局命令配置"""
+        p = self._dir / "command.json"
+        data = self._read_file(p)
+        if isinstance(data, dict):
+            try:
+                return CommandConfig.model_validate(data)
+            except Exception:
+                logger.warning("全局 command.json 解析失败")
+        return CommandConfig.defaults()
+
+    def save_global_commands(self, commands: CommandConfig):
+        """保存全局命令配置"""
+        p = self._dir / "command.json"
+        self._write_file(p, commands.model_dump(mode="json", by_alias=True))
+
+    # ==================== 单配置的 command.json（合并全局） ====================
+
+    def load_config_commands(self, name: str) -> CommandConfig:
+        """加载各配置自己的命令配置（仅包含显式设置的项，无则返回空）"""
+        p = self._config_dir(name) / "command.json"
+        data = self._read_file(p)
+        if isinstance(data, dict):
+            try:
+                return CommandConfig.model_validate(data)
+            except Exception:
+                logger.warning(f"[{name}] command.json 解析失败")
+        return CommandConfig(commands={})
+
+    def save_config_commands(self, name: str, commands: CommandConfig):
+        """保存各配置的命令配置（仅保存与全局不同的项）"""
+        # 直接全量保存，简洁可靠
+        p = self._config_dir(name) / "command.json"
+        self._write_file(p, commands.model_dump(mode="json", by_alias=True))
+
     # ==================== 批量保存 ====================
 
     def save_config(self, name: str, state: "ConfigState"):
-        """保存一个配置的全部 4 个文件"""
+        """保存一个配置的全部 5 个文件"""
         self.save_config_info(name, state.info)
+        self.save_config_commands(name, state.commands)
         self.save_config_records(name, state.records)
         self.save_config_permissions(name, state.permissions)
         self.save_config_blacklist(name, state.blacklist)
@@ -210,8 +248,15 @@ class DataManager:
     # ==================== 启动校验 ====================
 
     def check_all(self):
-        """确保至少有一个配置存在"""
+        """确保全局 command.json 和至少一个配置存在"""
+        # 全局 command.json
+        if not (self._dir / "command.json").exists():
+            self.save_global_commands(CommandConfig.defaults())
+            logger.info("已创建全局 command.json")
+
+        # 默认配置
         configs = self.list_configs()
         if not configs:
             self.save_config_info("default", ConfigInfo())
+            self.save_config_commands("default", CommandConfig(commands={}))
             logger.info("已创建默认配置 'default'")

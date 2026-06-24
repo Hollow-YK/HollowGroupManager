@@ -7,7 +7,7 @@ import logging
 from datetime import datetime
 from typing import Optional, List, TYPE_CHECKING
 
-from .models import ConfigInfo, ConfigState, PunishRecord, BlacklistItem
+from .models import ConfigInfo, ConfigState, CommandItem, CommandConfig, PunishRecord, BlacklistItem
 from .data_manager import DataManager
 from .render import render_help, render_record_table
 
@@ -34,15 +34,19 @@ class CommandHandler:
 
         # 多配置运行时数据
         self.configs: dict[str, ConfigState] = {}
+        self._cmd_map: dict[str, str] = {}  # 外部名 → 内部命令名
+        self.global_commands: CommandConfig = CommandConfig.defaults()
 
     # ==================== 生命周期 ====================
 
     def load(self):
         self.dm.check_all()
         self.configs.clear()
+        self.global_commands = self.dm.load_global_commands()
 
         for name in self.dm.list_configs():
             info = self.dm.load_config_info(name)
+            commands = self.dm.load_config_commands(name)
             records = self.dm.load_config_records(name)
             permissions = self.dm.load_config_permissions(name)
             blacklist = self.dm.load_config_blacklist(name)
@@ -57,7 +61,7 @@ class CommandHandler:
             self.configs[name] = ConfigState(
                 name=name,
                 info=info,
-                records=records,
+                commands=commands,
                 records_by_id=records_by_id,
                 permissions=permissions,
                 blacklist=blacklist,
@@ -66,6 +70,24 @@ class CommandHandler:
 
         total_records = sum(len(c.records) for c in self.configs.values())
         logger.info(f"已加载: {len(self.configs)} 配置 {total_records} 记录")
+
+        # 构建外部名 → 内部命令名的映射
+        self._build_cmd_map()
+
+    def _build_cmd_map(self):
+        """从全局+所有配置的命令 names 构建 name→internal 映射"""
+        self._cmd_map.clear()
+        # 全局命令
+        for internal, item in self.global_commands.commands.items():
+            for n in item.names:
+                if n and n not in self._cmd_map:
+                    self._cmd_map[n] = internal
+        # 各配置覆盖
+        for cfg in self.configs.values():
+            for internal, item in cfg.commands.commands.items():
+                for n in item.names:
+                    if n and n not in self._cmd_map:
+                        self._cmd_map[n] = internal
 
     def save(self):
         for name, state in self.configs.items():
@@ -133,6 +155,84 @@ class CommandHandler:
 
         return configs
 
+    # ==================== 命令配置检查 ====================
+
+    def _resolved_commands(self, cfg: ConfigState) -> CommandConfig:
+        """获取配置的完整命令配置（配置覆盖 + 全局回退）"""
+        merged = dict(self.global_commands.commands)  # 全局作底
+        merged.update(cfg.commands.commands)           # 配置覆盖
+        return CommandConfig(commands=merged)
+
+    def _get_cmd_item(self, internal: str, configs: list[ConfigState]) -> Optional[CommandItem]:
+        """获取命令配置（配置优先 → 全局回退，取首个启用的）"""
+        # 先在配置中查找
+        for cfg in configs:
+            item = cfg.commands.commands.get(internal)
+            if item and item.enabled:
+                return item
+        # 全局回退
+        item = self.global_commands.commands.get(internal)
+        if item and item.enabled:
+            return item
+        return None
+
+    def _get_sub_item(self, parent: CommandItem, sub_name: str) -> Optional[CommandItem]:
+        """获取子命令配置"""
+        if not parent.sub:
+            return None
+        return parent.sub.get(sub_name)
+
+    def _resolve_min_level(self, item: CommandItem, parent: Optional[CommandItem] = None) -> int:
+        """解析有效 min_level：None 则继承上级，上级也无则默认 1"""
+        if item.min_level is not None:
+            return item.min_level
+        if parent and parent.min_level is not None:
+            return parent.min_level
+        return 1
+
+    def _check_command(self, internal: str, configs: list[ConfigState],
+                       user_level: int) -> bool:
+        """
+        检查命令是否可用。返回 True=通过，False=不响应。
+        configs 为空时始终通过。
+        """
+        if not configs:
+            return True
+
+        item = self._get_cmd_item(internal, configs)
+        if item is None:
+            return False  # 未找到或全部禁用
+
+        min_lv = self._resolve_min_level(item)
+        if user_level == 0:
+            return True
+        if user_level == -1:
+            return min_lv == -1
+        return user_level <= min_lv
+
+    def _check_sub_command(self, internal: str, sub_name: str,
+                           configs: list[ConfigState], user_level: int) -> bool:
+        """检查子命令是否可用"""
+        if not configs:
+            return True
+
+        item = self._get_cmd_item(internal, configs)
+        if item is None:
+            return False
+
+        sub = self._get_sub_item(item, sub_name)
+        if sub is None:
+            return False
+        if not sub.enabled:
+            return False
+
+        min_lv = self._resolve_min_level(sub, item)
+        if user_level == 0:
+            return True
+        if user_level == -1:
+            return min_lv == -1
+        return user_level <= min_lv
+
     # ==================== 消息入口 ====================
 
     async def handle_message(self, event: dict) -> Optional[str]:
@@ -162,22 +262,38 @@ class CommandHandler:
         parts = raw.split()
         if not parts:
             return None
-        cmd = parts[0].lower()
+        ext_cmd = parts[0].lower()
 
         # 从消息中提取 at 列表
         at_list = self._extract_at(event)
 
-        if cmd == "help":
-            return await self._help(level, group_id, parts)
-        elif cmd == "p":
+        # 解析外部名 → 内部名
+        internal = self._cmd_map.get(ext_cmd)
+        if internal is None:
+            return None  # 不认识的命令，不响应
+
+        # 命令启用 + 权限检查
+        if internal in ("help", "config"):
+            ok = self._check_command(internal, list(self.configs.values()), level)
+        else:
+            match_cfgs = self._find_configs(group_id)
+            ok = self._check_command(internal, match_cfgs, level)
+        if not ok:
+            return None  # 禁用或权限不足，不响应
+
+        if internal == "help":
+            sender = event.get("sender", {})
+            sender_card = sender.get("card", "") or sender.get("nickname", "")
+            return await self._help(level, sender_id, group_id, parts, sender_card)
+        elif internal == "punish":
             return await self._punish(level, sender_id, group_id, parts, at_list)
-        elif cmd == "rp":
+        elif internal == "revoke":
             return await self._revoke(level, sender_id, group_id, parts)
-        elif cmd == "h":
+        elif internal == "history":
             return await self._query(level, group_id, parts, at_list)
-        elif cmd == "a":
+        elif internal == "admin":
             return await self._permission(level, sender_id, group_id, parts, at_list)
-        elif cmd == "config":
+        elif internal == "config":
             return await self._config_cmd(level, sender_id, group_id, parts)
 
         return None
@@ -290,120 +406,280 @@ class CommandHandler:
 
     # ==================== /help ====================
 
-    async def _help(self, level: int, group_id: str, parts: List[str]) -> str:
+    _CMD_DESC = {
+        "help": "查看帮助",
+        "punish": "处罚成员",
+        "revoke": "撤销处罚",
+        "history": "查询记录",
+        "admin": "权限管理",
+        "config": "配置管理",
+    }
+
+    # 概览用：格式行（{cmd} 替换为配置中的第一个命令名）
+    _CMD_FORMAT = {
+        "help":    "{w}{cmd} [命令]",
+        "punish":  "{w}{cmd} <目标> [配置] <方式> [内容] <原因>",
+        "revoke":  "{w}{cmd} [配置] <记录ID> [撤销原因]",
+        "history": "{w}{cmd} [配置] [目标] [-i]",
+        "admin":   "{w}{cmd} [配置] <目标> [等级]",
+        "config":  "{w}{cmd} <子命令>",
+    }
+
+    # 概览用：示例（{cmd} 替换为配置中的第一个命令名）
+    _CMD_EXAMPLES = {
+        "help":    ["{w}{cmd}", "{w}{cmd} <命令>"],
+        "punish":  ["{w}{cmd} @某人 mute 1d2h 广告刷屏",
+                    "{w}{cmd} 123456 kick f 严重违规"],
+        "revoke":  ["{w}{cmd} 5", "{w}{cmd} 反馈组 5 误判"],
+        "history": ["{w}{cmd}", "{w}{cmd} @某人 -i", "{w}{cmd} 反馈组"],
+        "admin":   ["{w}{cmd} @某人 1", "{w}{cmd} 反馈组 @某人 2"],
+        "config":  ["{w}{cmd} new 反馈组", "{w}{cmd} 反馈组 notify"],
+    }
+
+    # 详细帮助用：完整说明
+    _CMD_DETAIL = {
+        "help":    ["> {w}{cmd} [命令]", "~ {w}{cmd}  → 概览  /  {w}{cmd} <命令>  → 详情"],
+        "punish":  ["> {w}{cmd} <目标> [配置] <方式> [内容] <原因>",
+                    "- <目标>  @某人 或 QQ号",
+                    "- [配置]  指定配置名（可选，不填=当前群所有配置）",
+                    "- <方式>  kick / mute / warn",
+                    "- [内容]  kick可选f(黑名单)；mute必填时长；warn不需要",
+                    "- <原因>  缺失时记为不合规，不执行",
+                    "# 时长格式", "- 纯数字=天  组合 1d2h30m",
+                    "~ {w}{cmd} @某人 mute 1d2h 广告刷屏"],
+        "revoke":  ["> {w}{cmd} [配置] <记录ID> [撤销原因]",
+                    "- [配置]  多配置群必填，单配置群可选",
+                    "! 仅可撤销已执行/执行失败/部分失败的记录",
+                    "~ {w}{cmd} 5  /  {w}{cmd} 反馈组 5 误判"],
+        "history": ["> {w}{cmd} [配置] [目标] [-i]",
+                    "- [配置]  指定配置名（多配置群必填）",
+                    "- 无参数  全部记录表格  /  -i  图片详情",
+                    "! 状态颜色：绿已执行 橙已撤销 红失败 灰不合规"],
+        "admin":   ["> {w}{cmd} [配置] <目标> [等级]",
+                    "- -1=普通成员  ≥1 数字越大权限越低（默认1）",
+                    "! 不可设0，不可改自己",
+                    "~ {w}{cmd} @某人 1  /  {w}{cmd} 反馈组 @某人 2"],
+        "config":  ["> {w}{cmd} new <名称>         创建新配置",
+                    "> {w}{cmd} rename <旧> <新>    重命名配置",
+                    "> {w}{cmd} <名称> notify      设本群为通知群",
+                    "> {w}{cmd} <名称> set         本群加入执行群",
+                    "> {w}{cmd} <名称> remove      本群移出配置",
+                    "> {w}{cmd} <名称> group       查看配置信息",
+                    "! 一个群可属于多个配置，通知群也可设为执行群"],
+    }
+
+    async def _help(self, level: int, sender_id: str, group_id: str,
+                     parts: List[str], sender_card: str = "") -> str:
         w = self.primary_wake
+        configs = self._find_configs(group_id)
         is_super = (level == 0)
-        level_text = f"权限: {level}" + (
-            " (超级管理员)" if is_super else " (管理员)" if level == 1 else "")
 
-        if len(parts) < 2:
-            lines = self._build_overview_lines(w, is_super)
-            title = "HollowGroupManager 帮助"
+        # 副标题：发送者群昵称 + QQ
+        if sender_card:
+            subtitle = f"{sender_card} ({sender_id})"
         else:
-            command = parts[1].lower()
-            if command not in ("help", "p", "rp", "h", "a", "config"):
-                return f"未知命令：{command}，可用：help, p, rp, h, a, config"
-            if command in ("a", "config") and not is_super:
-                return "此命令仅超级管理员可用"
-            lines = self._build_detail_lines(w, command)
-            title = f"帮助 — {w}{command}"
+            subtitle = f"QQ: {sender_id}"
 
-        png = self._render_png(lambda: render_help(title, level_text, lines))
+        # 解析要查看的命令（外部名 → 内部名）
+        if len(parts) >= 2:
+            ext_cmd = parts[1].lower()
+            detail_internal = self._cmd_map.get(ext_cmd)
+            if detail_internal is None:
+                known = sorted(set(self._cmd_map.values()))
+                return f"未知命令：{ext_cmd}，可用：{', '.join(known)}"
+            if detail_internal in ("admin", "config") and not is_super:
+                return None  # 不响应
+        else:
+            ext_cmd = None
+            detail_internal = None
+
+        if detail_internal:
+            lines = self._build_detail_lines(w, detail_internal, ext_cmd, configs)
+            title = f"帮助 — {ext_cmd}"
+        else:
+            lines = self._build_overview_lines(w, configs, sender_id)
+            title = "HollowGroupManager 帮助"
+
+        png = self._render_png(lambda: render_help(title, subtitle, lines))
         if png:
             await self._send_image(int(group_id), png)
             return ""
-        return self._help_fallback_text(w, is_super, parts[1].lower() if len(parts) >= 2 else None)
+        return self._help_fallback_text(w, configs, level, detail_internal)
 
-    def _build_overview_lines(self, w: str, is_super: bool) -> list[str]:
+    def _cmd_visible(self, item: Optional[CommandItem], user_level: int) -> bool:
+        """命令是否对该用户可见"""
+        if item is None or not item.enabled:
+            return False
+        min_lv = self._resolve_min_level(item)
+        if user_level == 0:
+            return True
+        if user_level == -1:
+            return min_lv == -1
+        return user_level <= min_lv
+
+    def _format_cmd_names(self, item: CommandItem, w: str) -> str:
+        """格式化命令名显示，如 '{w}punish (或 {w}p)'"""
+        if not item.names:
+            return ""
+        primary = item.names[0]
+        aliases = [n for n in item.names[1:]]
+        if aliases:
+            return f"{w}{primary} (或 {w}{' '.join(aliases)})"
+        return f"{w}{primary}"
+
+    def _primary_cmd_name(self, item: CommandItem) -> str:
+        """获取命令的第一个名称"""
+        return item.names[0] if item.names else ""
+
+    def _build_overview_lines(self, w: str, configs: list[ConfigState],
+                               sender_id: str) -> list[str]:
+        """按配置分组生成帮助概览"""
         lines = [
-            "# 可用指令", "",
-            f"- 用 {w} 表示唤醒词（可在 config.json 中配置）", "",
-            f"> {w}help [命令]",
-            "- 查看帮助，可指定命令查看详细用法",
-            f"~ {w}help p", "",
-            f"> {w}p <目标> [配置] <方式> [内容] <原因>",
-            "- 处罚成员：kick / mute / warn。目标支持 @某人 或 QQ号",
-            f"~ {w}p @某人 mute 1d2h 广告", "",
-            f"> {w}rp [配置] <记录ID> [撤销原因]",
-            "- 撤销处罚记录",
-            f"~ {w}rp 5  /  {w}rp 反馈组 5 误判", "",
-            f"> {w}h [配置] [目标] [-i]",
-            "- 查询处罚记录，无参数=全组表格，-i=图片表格详情",
-            f"~ {w}h  /  {w}h @某人  /  {w}h 反馈组 123456 -i",
+            "# 可用指令",
+            f"- 唤醒词: {', '.join(self.wake_words)}",
         ]
-        if is_super:
-            lines += [
-                "", f"> {w}a [配置] <目标> [1/-1]",
-                "- 设置成员权限，1=管理员，-1=普通成员",
-                f"~ {w}a @某人 1  /  {w}a 反馈组 @某人 1", "",
-                f"> {w}config <子命令>",
-                "- 配置管理：new / rename / admin / set / remove / group",
-                f"~ {w}config new 反馈组",
-            ]
+
+        if not configs:
+            gc = self.dm.load_global_commands()
+            lines.append("# ── 全局（当前群未关联配置）──")
+            lines += self._render_cmd_section(gc, -1, w)
+            return lines
+
+        lines.append(f"- 本群关联 {len(configs)} 个配置")
+        lines.append("")
+        for cfg in configs:
+            cfg_level = 0 if sender_id in self.super_admins else cfg.permissions.get(sender_id, -1)
+            lv_label = "超级管理员（0）" if cfg_level == 0 else (
+                "普通成员（-1）" if cfg_level == -1 else f"管理员（{cfg_level}）")
+
+            ng = cfg.info.notify_group or "未设"
+            eg_count = len(cfg.info.execution_groups)
+            lines.append(f"# ── 配置 \"{cfg.name}\" ──")
+            lines.append(f"- 通知群: {ng}  |  执行群: {eg_count}个  |  记录: {len(cfg.records)}条"
+                         f"  |  我的权限: {lv_label}")
+            lines.append("")
+            lines += self._render_cmd_section(self._resolved_commands(cfg), cfg_level, w)
+
+            lines.append("")
         return lines
 
-    def _build_detail_lines(self, w: str, cmd: str) -> list[str]:
-        detail = {
-            "help": [f"# {w}help — 查看帮助", f"> {w}help [命令]",
-                     f"~ {w}help  → 概览  /  {w}help p  → 详情"],
-            "p": [f"# {w}p — 处罚成员", "! 权限：超级管理员 / 管理员",
-                  f"> {w}p <目标> [配置] <方式> [内容] <原因>",
-                  "- <目标>  @某人 或 QQ号",
-                  "- [配置]  指定配置名（可选，不填=当前群所有配置）",
-                  "- <方式>  kick / mute / warn",
-                  "- [内容]  kick可选f(黑名单)；mute必填时长；warn不需要",
-                  "- <原因>  缺失时记为不合规，不执行",
-                  "# 时长格式", "- 纯数字=天  组合 1d2h30m",
-                  "# 三步检查", "- 成员在群 → 状态检查 → 执行",
-                  f"~ {w}p @某人 mute 1d2h 广告刷屏",
-                  f"~ {w}p 123456 kick f 严重违规",
-                  f"~ {w}p @某人 反馈组 warn 注意言辞"],
-            "rp": [f"# {w}rp — 撤销处罚", "! 权限：超级管理员 / 管理员",
-                   f"> {w}rp [配置] <记录ID> [撤销原因]",
-                   "- [配置]  多配置群必填，单配置群可选",
-                   "! 仅可撤销已执行/执行失败/部分失败的记录",
-                   f"~ {w}rp 5  /  {w}rp 反馈组 5 误判"],
-            "h": [f"# {w}h — 查询记录", "! 权限：超级管理员 / 管理员",
-                  f"> {w}h [配置] [目标] [-i]",
-                  "- [配置]  指定配置名（多配置群必填）",
-                  "- 无参数  全部记录表格",
-                  "- 指定目标  汇总统计",
-                  "- -i  图片表格详情",
-                  "! 状态颜色：绿已执行 橙已撤销 红失败 灰不合规",
-                  f"~ {w}h  /  {w}h @某人  /  {w}h 反馈组 123456 -i"],
-            "a": [f"# {w}a — 设置权限", "! 权限：仅超级管理员",
-                  f"> {w}a [配置] <目标> [1/-1]",
-                  "- [配置]  指定配置名（多配置群必填）",
-                  "- 1=管理员(默认)  -1=普通成员",
-                  "! 不可设0，不可改自己",
-                  f"~ {w}a @某人  /  {w}a 反馈组 123456 -1"],
-            "config": [f"# {w}config — 配置管理", "! 权限：仅超级管理员",
-                       f"> {w}config new <名称>         创建新配置",
-                       f"> {w}config rename <旧> <新>    重命名配置",
-                       f"> {w}config <名称> admin       设本群为通知群",
-                       f"> {w}config <名称> set         本群加入执行群",
-                       f"> {w}config <名稱> remove      本群移出配置",
-                       f"> {w}config <名称> group       查看配置信息",
-                       "! 一个群可属于多个配置",
-                       "! 通知群也可设为执行群",
-                       f"~ {w}config new 反馈组",
-                       f"~ {w}config 反馈组 admin",
-                       f"~ {w}config 反馈组 set"],
-        }
-        return detail.get(cmd, [f"未知命令: {cmd}"])
+    def _render_cmd_section(self, cc: "CommandConfig",
+                             user_level: int, w: str) -> list[str]:
+        """渲染命令列表：格式 + 描述 + 示例"""
+        lines = []
+        order = ["help", "punish", "revoke", "history", "admin", "config"]
+        for internal in order:
+            item = cc.commands.get(internal)
+            if item is None or not self._cmd_visible(item, user_level):
+                continue
+            primary = self._primary_cmd_name(item)
+            aliases = item.names[1:] if len(item.names) > 1 else []
+            desc = self._CMD_DESC.get(internal, "")
+            min_str = ""
+            if item.min_level is not None and item.min_level != -1:
+                min_str = f"  ·需等级 {item.min_level}"
 
-    def _help_fallback_text(self, w: str, is_super: bool, cmd: Optional[str]) -> str:
-        if cmd and cmd not in ("help", "p", "rp", "h", "a", "config"):
-            return f"未知命令：{cmd}，可用：help, p, rp, h, a, config"
+            # 格式行
+            fmt = self._CMD_FORMAT.get(internal, "")
+            if fmt:
+                fmt = fmt.replace("{w}", w).replace("{cmd}", primary)
+                lines.append(f"> {fmt}{min_str}")
+
+            # 别名（若有）
+            if aliases:
+                alias_str = " ".join(f"{w}{a}" for a in aliases)
+                lines.append(f"- 别名: {alias_str}")
+
+            # 描述
+            lines.append(f"- {desc}")
+
+            # 示例（取前两个）
+            examples = self._CMD_EXAMPLES.get(internal, [])
+            for ex in examples[:2]:
+                ex = ex.replace("{w}", w).replace("{cmd}", primary)
+                lines.append(f"~ {ex}")
+
+            lines.append("")
+        return lines
+
+    def _build_detail_lines(self, w: str, internal: str, ext_cmd: str,
+                             configs: list[ConfigState]) -> list[str]:
+        """生成命令的详细帮助，以用户输入的名称为主，其余为别名"""
+        lines = [f"# {self._CMD_DESC.get(internal, internal)}"]
+
+        # 获取完整的 names 列表（全局兜底）
+        all_names: list[str] = []
+        for cfg in configs:
+            resolved = self._resolved_commands(cfg)
+            item = resolved.commands.get(internal)
+            if item and item.enabled and ext_cmd in item.names:
+                all_names = list(item.names)
+                break
+        if not all_names:
+            item = self.global_commands.commands.get(internal)
+            if item:
+                all_names = list(item.names)
+
+        # 别名行（除用户输入外的名字）
+        aliases = [n for n in all_names if n != ext_cmd]
+        if aliases:
+            alias_str = " ".join(f"{w}{a}" for a in aliases)
+            lines.append(f"- 别名: {alias_str}")
+
+        # 收集各配置中显式设置了该命令的（仅配置自己，不包含全局继承）
+        shown = set()
+        for cfg in configs:
+            own = cfg.commands.commands.get(internal)
+            if own is None:
+                continue
+            # 使用 resolved 获取最终名称和权限
+            resolved = self._resolved_commands(cfg)
+            item = resolved.commands.get(internal)
+            if item and item.enabled and ext_cmd in item.names:
+                name_str = self._format_cmd_names(item, w)
+                if name_str not in shown:
+                    shown.add(name_str)
+                    lv = self._resolve_min_level(item)
+                    lines.append(f"- 配置 [{cfg.name}]: {name_str}  需等级: {lv}")
+
+        if not shown:
+            item = self.global_commands.commands.get(internal)
+            if item and ext_cmd in item.names:
+                name_str = self._format_cmd_names(item, w)
+                lv = self._resolve_min_level(item)
+                lines.append(f"- 全局: {name_str}  需等级: {lv}")
+
+        # 详细用法（使用用户输入的名称）
+        detail = self._CMD_DETAIL.get(internal, [])
+        if detail:
+            lines.append("")
+            for d in detail:
+                lines.append(d.replace("{w}", w).replace("{cmd}", ext_cmd))
+        return lines
+
+    def _help_fallback_text(self, w: str, configs: list[ConfigState],
+                             level: int, cmd: Optional[str]) -> str:
+        """纯文本回退帮助"""
+        if cmd:
+            detail = self._CMD_DETAIL.get(cmd, [f"{{w}}{{cmd}}"])
+            detail = [d.replace("{w}", w).replace("{cmd}", cmd) for d in detail]
+            return "\n".join([f"=== {cmd} 帮助 ==="] + detail)
+
         lines = [f"=== HollowGroupManager 帮助 ===",
-                 f"唤醒词: {', '.join(self.wake_words)}", "",
-                 f"{w}help [命令]  查看帮助",
-                 f"{w}p <目标> [配置] <方式> [内容] <原因>  处罚",
-                 f"{w}rp [配置] <记录ID> [原因]  撤销",
-                 f"{w}h [配置] [目标] [-i]  查询"]
-        if is_super:
-            lines += [f"{w}a [配置] <目标> [1/-1]  权限(超管)",
-                      f"{w}config <子命令>  配置(超管)"]
+                 f"唤醒词: {', '.join(self.wake_words)}", ""]
+        if not configs:
+            gc = self.dm.load_global_commands()
+            for internal, item in gc.commands.items():
+                if self._cmd_visible(item, level):
+                    lines.append(
+                        f"{self._format_cmd_names(item, w)}  {self._CMD_DESC.get(internal, '')}")
+        else:
+            for cfg in configs:
+                lines.append(f"── 配置 {cfg.name} ──")
+                for internal, item in cfg.commands.commands.items():
+                    if self._cmd_visible(item, level):
+                        lines.append(
+                            f"{self._format_cmd_names(item, w)}  {self._CMD_DESC.get(internal, '')}")
         return "\n".join(lines)
 
     # ==================== /p 处罚 ====================
@@ -813,9 +1089,9 @@ class CommandHandler:
             try:
                 nl = int(parts[target_idx + 1])
             except ValueError:
-                return "权限只能是1或-1"
-        if nl not in (1, -1):
-            return "权限只能是1或-1"
+                return "权限必须为数字（-1=普通成员，0 不可设，≥1 数字越大权限越低）"
+        if nl < -1 or nl == 0:
+            return "权限值无效（-1=普通成员，≥1 数字越大权限越低，0 不可设）"
 
         # 确定要设置的配置
         if cfg_name:
@@ -831,7 +1107,10 @@ class CommandHandler:
             cfg_names.append(c.name)
 
         self.save()
-        role = "管理员" if nl == 1 else "普通成员"
+        if nl == -1:
+            role = "普通成员"
+        else:
+            role = f"权限等级 {nl}"
         return f"已设置 {tqq} 为{role} (配置: {', '.join(cfg_names)})"
 
     # ==================== /config 配置管理 ====================
@@ -839,20 +1118,24 @@ class CommandHandler:
     async def _config_cmd(self, level: int, sender_id: str, group_id: str,
                           parts: List[str]) -> str:
         if level != 0:
-            return "仅超级管理员可用"
+            return None  # 仅超管可用，不响应
+
+        all_cfgs = list(self.configs.values())
         if len(parts) < 2:
             return ("子命令：\n"
                     "  config new <名称>              — 创建新配置\n"
                     "  config rename <旧名> <新名>     — 重命名配置\n"
-                    "  config <名称> admin            — 设本群为通知群\n"
+                    "  config <名称> notify           — 设本群为通知群\n"
                     "  config <名称> set              — 本群加入执行群\n"
                     "  config <名称> remove           — 本群移出配置\n"
-                    "  config <名稱> group            — 查看配置信息")
+                    "  config <名称> group            — 查看配置信息")
 
         first = parts[1].lower()
 
         # config new <名称>
         if first == "new":
+            if not self._check_sub_command("config", "new", all_cfgs, level):
+                return None
             if len(parts) < 3:
                 return "格式：config new <名称>"
             name = parts[2]
@@ -862,10 +1145,13 @@ class CommandHandler:
                 return f"配置 \"{name}\" 已存在"
             self.configs[name] = ConfigState(name=name, info=ConfigInfo())
             self.save()
+            self._build_cmd_map()
             return f"配置 \"{name}\" 创建成功"
 
         # config rename <旧名> <新名>
         if first == "rename":
+            if not self._check_sub_command("config", "rename", all_cfgs, level):
+                return None
             if len(parts) < 4:
                 return "格式：config rename <旧名> <新名>"
             old_name = parts[2]
@@ -880,6 +1166,7 @@ class CommandHandler:
             self.configs[new_name] = state
             self.dm.save_config(new_name, state)
             self.dm.remove_config(old_name)
+            self._build_cmd_map()
             return f"配置 \"{old_name}\" 已重命名为 \"{new_name}\""
 
         # config <名称> <子命令>
@@ -888,12 +1175,15 @@ class CommandHandler:
             return f"配置 \"{name}\" 不存在，可用：config new <名称> 创建"
 
         if len(parts) < 3:
-            return f"格式：config {name} admin / set / remove / group"
+            return f"格式：config {name} notify / set / remove / group"
 
         sub = parts[2].lower()
+        if not self._check_sub_command("config", sub, all_cfgs, level):
+            return None
+
         cfg = self.configs[name]
 
-        if sub == "admin":
+        if sub == "notify":
             cfg.info.notify_group = group_id
             self.save()
             return f"已将本群设为配置 \"{name}\" 的通知群"
