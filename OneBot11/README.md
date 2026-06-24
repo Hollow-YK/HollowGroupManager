@@ -51,6 +51,11 @@ python main.py
   },
   "render": {
     "enabled": true
+  },
+  "log": {
+    "log_to_file": true,
+    "log_level": "INFO",
+    "log_dir": "logs"
   }
 }
 ```
@@ -66,6 +71,9 @@ python main.py
 | `plugin.super_admins` | 超管 QQ 列表（必须配置） |
 | `plugin.data_dir` | 数据目录 |
 | `render.enabled` | 图片渲染开关（Pillow ~5MB，可关闭降级为纯文本） |
+| `log.log_to_file` | 是否输出日志到文件（`true` / `false`） |
+| `log.log_level` | 日志等级：`DEBUG` / `INFO` / `WARNING` / `ERROR` |
+| `log.log_dir` | 日志目录，默认 `logs`，每次启动生成 `YYYY-MM-DD_HH-MM-SS.log` |
 
 ### 4. 通信模式
 
@@ -138,11 +146,12 @@ OneBot11/
 │   ├── data_manager.py  # JSON 持久化（.tmp 原子写）
 │   ├── commands.py      # 指令实现
 │   └── render.py        # 图片生成（Pillow）
-└── data/                # 运行时数据
-    ├── groups.json
-    ├── records.json
-    ├── permissions.json
-    └── blacklist.json
+├── data/                # 运行时数据
+│   ├── groups.json
+│   ├── records.json
+│   ├── permissions.json
+│   └── blacklist.json
+└── logs/                # 日志文件（时间命名）
 ```
 
 ## 数据兼容

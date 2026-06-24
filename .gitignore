@@ -29,6 +29,7 @@ config.json
 data/
 
 # Logs
+logs/
 *.log
 
 # IDE
