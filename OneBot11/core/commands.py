@@ -432,7 +432,7 @@ class CommandHandler:
         "help": "查看帮助",
         "punish": "处罚成员",
         "revoke": "撤销处罚",
-        "history": "查询记录",
+        "history": "查询处罚记录",
         "admin": "权限管理",
         "config": "配置管理",
     }
@@ -449,18 +449,17 @@ class CommandHandler:
 
     # 概览用：示例（{cmd} 替换为配置中的第一个命令名）
     _CMD_EXAMPLES = {
-        "help":    ["{w}{cmd}", "{w}{cmd} <命令>"],
-        "punish":  ["{w}{cmd} @某人 mute 1d2h 广告刷屏",
-                    "{w}{cmd} 123456 kick f 严重违规"],
-        "revoke":  ["{w}{cmd} 5", "{w}{cmd} 反馈组 5 误判"],
-        "history": ["{w}{cmd}", "{w}{cmd} @某人 -i", "{w}{cmd} 反馈组"],
-        "admin":   ["{w}{cmd} @某人 1", "{w}{cmd} 反馈组 @某人 2"],
-        "config":  ["{w}{cmd} new 反馈组", "{w}{cmd} 反馈组 notify"],
+        "help":    ["{w}{cmd} <命令>"],
+        "punish":  ["{w}{cmd} @某人 mute 1d2h 广告刷屏"],
+        "revoke":  ["{w}{cmd} 5 误判"],
+        "history": ["{w}{cmd} @某人 -i"],
+        "admin":   ["{w}{cmd} @某人 1"],
+        "config":  ["{w}{cmd} new 反馈组", "{w}{cmd} 反馈组 set"],
     }
 
     # 详细帮助用：完整说明
     _CMD_DETAIL = {
-        "help":    ["> {w}{cmd} [命令]", "~ {w}{cmd}  → 概览  /  {w}{cmd} <命令>  → 详情"],
+        "help":    ["> {w}{cmd} [命令]", "~ {w}{cmd}  → 概览", "~ {w}{cmd} <命令>  → 详情"],
         "punish":  ["> {w}{cmd} <目标> [配置] <方式> [内容] <原因>",
                     "- <目标>  @某人 或 QQ号",
                     "- [配置]  指定配置名（可选，不填=当前群所有配置）",
