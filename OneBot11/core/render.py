@@ -62,7 +62,7 @@ def _get_text_width(text: str, font: ImageFont.FreeTypeFont) -> int:
 
 def render_help(title: str, subtitle: Optional[str],
                 lines: List[str]) -> bytes:
-    """渲染帮助图片，返回 PNG 字节"""
+    """渲染帮助图片，返回 PNG 字节。@ 前缀标记卡片起始。"""
     font_title = _get_font(32, bold=True)
     font_sub = _get_font(20, bold=False)
     font_section = _get_font(22, bold=True)
@@ -74,9 +74,12 @@ def render_help(title: str, subtitle: Optional[str],
     left_pad = 28
     right_pad = 20
     width = 820
-    content_w = width - left_pad - right_pad
 
-    # 第一遍：计算高度
+    # 行高常量
+    HEIGHTS = {'#': 42, '>': 38, '-': 34, '~': 30, '!': 34, '@': 0, '=': 42}
+
+    # 第一遍：计算高度，记录各行 y 位置
+    row_y: list[tuple[int, str, str, str]] = []  # (y, prefix, text, raw)
     y = 48
     if subtitle:
         y += 36
@@ -88,22 +91,46 @@ def render_help(title: str, subtitle: Optional[str],
             y += 18
             continue
         prefix = line[0]
-        if prefix == '#':
-            y += 42
-        elif prefix == '>':
-            y += 38
-        elif prefix == '-':
-            y += 34
-        elif prefix == '~':
-            y += 30
-        elif prefix == '!':
-            y += 34
-        else:
-            y += 34
+        text = line[2:] if len(line) > 2 else ""
+        row_y.append((y, prefix, text, line))  # 保留完整原文用于 @ 判断
+        y += HEIGHTS.get(prefix, 34)
+
+    # 找出卡片范围：`@` 开始，`@@` 结束
+    PAD = 10
+    card_margin = 16  # 卡片到图片左右边距
+    cards: list[tuple[int, int]] = []  # (start_y, end_y)
+    in_card: list[bool] = []
+    card_start: Optional[int] = None
+    for ry, rp, text, raw in row_y:
+        if rp == '@':
+            if raw == "@@":
+                if card_start is not None:
+                    cards.append((card_start, ry - 8))
+                card_start = None
+            else:
+                card_start = ry
+            in_card.append(False)
+            continue
+        in_card.append(card_start is not None)
+    if card_start is not None:
+        last_ry, last_pf, _, _ = row_y[-1]
+        cards.append((card_start, last_ry + HEIGHTS.get(last_pf, 34) - 4))
+
     height = y + 30
 
     img = Image.new("RGB", (width, height), "white")
     draw = ImageDraw.Draw(img)
+
+    # ---- 绘制卡片背景（左右对称边距） ----
+    card_bg = "#F5F7FF"
+    card_border = "#D6DBF0"
+    card_x0 = card_margin
+    card_x1 = width - card_margin
+    for cy0, cy1 in cards:
+        draw.rounded_rectangle(
+            (card_x0, cy0 - PAD, card_x1, cy1 + PAD),
+            radius=14, fill=card_bg, outline=card_border, width=1,
+        )
 
     # 标题
     draw.text((left_pad, 16), title, fill="#1A237E", font=font_title)
@@ -115,34 +142,29 @@ def render_help(title: str, subtitle: Optional[str],
     # 分隔线
     draw.line((left_pad, div_y, width - right_pad, div_y), fill="#E0E0E0", width=2)
 
-    # 内容
-    y = div_y + 20
-    for line in lines:
-        if not line:
-            y += 18
+    # ---- 绘制文字 ----
+    for i, (ry, prefix, text, _) in enumerate(row_y):
+        if prefix == '@':
             continue
-        prefix = line[0]
-        text = line[2:] if len(line) > 2 else ""
         indent = 0 if prefix in ('#', '>') else 20
+        if in_card[i]:
+            indent += PAD
 
-        if prefix == '#':
-            draw.text((left_pad + indent, y), text, fill="#1565C0", font=font_section)
-            y += 42
+        if prefix == '=':
+            tw = _get_text_width(text, font_section)
+            draw.text(((width - tw) / 2, ry), text, fill="#1565C0", font=font_section)
+        elif prefix == '#':
+            draw.text((left_pad + indent, ry), text, fill="#1565C0", font=font_section)
         elif prefix == '>':
-            draw.text((left_pad + indent, y), text, fill="#1A237E", font=font_cmd)
-            y += 38
+            draw.text((left_pad + indent, ry), text, fill="#1A237E", font=font_cmd)
         elif prefix == '-':
-            draw.text((left_pad + indent, y), text, fill="#212121", font=font_desc)
-            y += 34
+            draw.text((left_pad + indent, ry), text, fill="#212121", font=font_desc)
         elif prefix == '~':
-            draw.text((left_pad + indent, y), text, fill="#757575", font=font_example)
-            y += 30
+            draw.text((left_pad + indent, ry), text, fill="#757575", font=font_example)
         elif prefix == '!':
-            draw.text((left_pad + indent, y), text, fill="#E65100", font=font_warn)
-            y += 34
+            draw.text((left_pad + indent, ry), text, fill="#E65100", font=font_warn)
         else:
-            draw.text((left_pad + indent, y), text, fill="#212121", font=font_desc)
-            y += 34
+            draw.text((left_pad + indent, ry), text, fill="#212121", font=font_desc)
 
     buf = BytesIO()
     img.save(buf, format="PNG")

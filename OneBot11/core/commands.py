@@ -541,8 +541,10 @@ class CommandHandler:
 
         if not configs:
             gc = self.dm.load_global_commands()
-            lines.append("# ── 全局（当前群未关联配置）──")
+            lines.append("@")
+            lines.append("= ── 全局（当前群未关联配置）──")
             lines += self._render_cmd_section(gc, -1, w)
+            lines.append("@@")
             return lines
 
         lines.append(f"- 本群关联 {len(configs)} 个配置")
@@ -554,12 +556,13 @@ class CommandHandler:
 
             ng = cfg.info.notify_group or "未设"
             eg_count = len(cfg.info.execution_groups)
-            lines.append(f"# ── 配置 \"{cfg.name}\" ──")
+            lines.append("@")
+            lines.append(f"= ── 配置 \"{cfg.name}\" ──")
             lines.append(f"- 通知群: {ng}  |  执行群: {eg_count}个  |  记录: {len(cfg.records)}条"
                          f"  |  我的权限: {lv_label}")
             lines.append("")
             lines += self._render_cmd_section(self._resolved_commands(cfg), cfg_level, w)
-
+            lines.append("@@")
             lines.append("")
         return lines
 
