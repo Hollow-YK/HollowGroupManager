@@ -116,7 +116,10 @@ def render_help(title: str, subtitle: Optional[str],
         last_ry, last_pf, _, _ = row_y[-1]
         cards.append((card_start, last_ry + HEIGHTS.get(last_pf, 34) - 4))
 
-    height = y + 30
+    # 尾部声明
+    footer_y = y + 8
+    footer_h = 56
+    height = y + footer_h + 20
 
     img = Image.new("RGB", (width, height), "white")
     draw = ImageDraw.Draw(img)
@@ -165,6 +168,16 @@ def render_help(title: str, subtitle: Optional[str],
             draw.text((left_pad + indent, ry), text, fill="#E65100", font=font_warn)
         else:
             draw.text((left_pad + indent, ry), text, fill="#212121", font=font_desc)
+
+    # ---- 尾部声明 ----
+    draw.line((left_pad, footer_y, width - right_pad, footer_y), fill="#E0E0FF", width=2)
+    footer_font = _get_font(16, bold=False)
+    line1 = "License: GNU AGPL v3.0"
+    line2 = "https://github.com/Hollow-YK/HollowGroupManager"
+    tw1 = _get_text_width(line1, footer_font)
+    tw2 = _get_text_width(line2, footer_font)
+    draw.text(((width - tw1) / 2, footer_y), line1, fill="#9E9EBB", font=footer_font)
+    draw.text(((width - tw2) / 2, footer_y + 22), line2, fill="#9E9EBB", font=footer_font)
 
     buf = BytesIO()
     img.save(buf, format="PNG")
