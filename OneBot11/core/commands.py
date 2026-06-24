@@ -307,11 +307,11 @@ class CommandHandler:
             sender = event.get("sender", {})
             sender_card = sender.get("card", "") or sender.get("nickname", "")
             return await self._help(level, sender_id, group_id, parts, sender_card)
-        elif internal == "punish":
+        elif internal == "punish_do":
             return await self._punish(level, sender_id, group_id, parts, at_list)
-        elif internal == "revoke":
+        elif internal == "punish_revoke":
             return await self._revoke(level, sender_id, group_id, parts)
-        elif internal == "history":
+        elif internal == "punish_history":
             return await self._query(level, group_id, parts, at_list)
         elif internal == "admin":
             return await self._permission(level, sender_id, group_id, parts, at_list)
@@ -430,9 +430,9 @@ class CommandHandler:
 
     _CMD_DESC = {
         "help": "查看帮助",
-        "punish": "处罚成员",
-        "revoke": "撤销处罚",
-        "history": "查询处罚记录",
+        "punish_do": "处罚成员",
+        "punish_revoke": "撤销处罚",
+        "punish_history": "查询处罚记录",
         "admin": "权限管理",
         "config": "配置管理",
     }
@@ -440,9 +440,9 @@ class CommandHandler:
     # 概览用：格式行（{cmd} 替换为配置中的第一个命令名）
     _CMD_FORMAT = {
         "help":    "{w}{cmd} [命令]",
-        "punish":  "{w}{cmd} <目标> [配置] <方式> [内容] <原因>",
-        "revoke":  "{w}{cmd} [配置] <记录ID> [撤销原因]",
-        "history": "{w}{cmd} [配置] [目标] [-i]",
+        "punish_do":  "{w}{cmd} <目标> [配置] <方式> [内容] <原因>",
+        "punish_revoke":  "{w}{cmd} [配置] <记录ID> [撤销原因]",
+        "punish_history": "{w}{cmd} [配置] [目标] [-i]",
         "admin":   "{w}{cmd} [配置] <目标> [等级]",
         "config":  "{w}{cmd} <子命令>",
     }
@@ -450,9 +450,9 @@ class CommandHandler:
     # 概览用：示例（{cmd} 替换为配置中的第一个命令名）
     _CMD_EXAMPLES = {
         "help":    ["{w}{cmd} <命令>"],
-        "punish":  ["{w}{cmd} @某人 mute 1d2h 广告刷屏"],
-        "revoke":  ["{w}{cmd} 5 误判"],
-        "history": ["{w}{cmd} @某人 -i"],
+        "punish_do":  ["{w}{cmd} @某人 mute 1d2h 广告刷屏"],
+        "punish_revoke":  ["{w}{cmd} 5 误判"],
+        "punish_history": ["{w}{cmd} @某人 -i"],
         "admin":   ["{w}{cmd} @某人 1"],
         "config":  ["{w}{cmd} new 反馈组", "{w}{cmd} 反馈组 set"],
     }
@@ -460,7 +460,7 @@ class CommandHandler:
     # 详细帮助用：完整说明
     _CMD_DETAIL = {
         "help":    ["> {w}{cmd} [命令]", "~ {w}{cmd}  → 概览", "~ {w}{cmd} <命令>  → 详情"],
-        "punish":  ["> {w}{cmd} <目标> [配置] <方式> [内容] <原因>",
+        "punish_do":  ["> {w}{cmd} <目标> [配置] <方式> [内容] <原因>",
                     "- <目标>  @某人 或 QQ号",
                     "- [配置]  指定配置名（可选，不填=当前群所有配置）",
                     "- <方式>  kick / mute / warn",
@@ -468,11 +468,11 @@ class CommandHandler:
                     "- <原因>  缺失时记为不合规，不执行",
                     "# 时长格式", "- 纯数字=天  组合 1d2h30m",
                     "~ {w}{cmd} @某人 mute 1d2h 广告刷屏"],
-        "revoke":  ["> {w}{cmd} [配置] <记录ID> [撤销原因]",
+        "punish_revoke":  ["> {w}{cmd} [配置] <记录ID> [撤销原因]",
                     "- [配置]  多配置群必填，单配置群可选",
                     "! 仅可撤销已执行/执行失败/部分失败的记录",
                     "~ {w}{cmd} 5  /  {w}{cmd} 反馈组 5 误判"],
-        "history": ["> {w}{cmd} [配置] [目标] [-i]",
+        "punish_history": ["> {w}{cmd} [配置] [目标] [-i]",
                     "- [配置]  指定配置名（多配置群必填）",
                     "- 无参数  全部记录表格  /  -i  图片详情",
                     "! 状态颜色：绿已执行 橙已撤销 红失败 灰不合规"],
@@ -564,14 +564,14 @@ class CommandHandler:
             lines.append("@")
             lines.append("= ── 全局（当前群未关联配置）──")
             lines += self._render_filtered_cmds(self.global_commands,
-                {"help", "punish", "revoke", "history", "admin", "config"}, -1, w)
+                {"help", "punish_do", "punish_revoke", "punish_history", "admin", "config"}, -1, w)
             lines.append("@@")
             return lines
 
         lines.append(f"- 本群关联 {len(configs)} 个配置")
         lines.append("")
 
-        ORDER = ["help", "punish", "revoke", "history", "admin", "config"]
+        ORDER = ["help", "punish_do", "punish_revoke", "punish_history", "admin", "config"]
 
         # 分析每个命令在各配置中的自定义情况
         customized_by: dict[str, set[str]] = {cmd: set() for cmd in ORDER}
@@ -630,7 +630,7 @@ class CommandHandler:
                                user_level: int, w: str) -> list[str]:
         """渲染指定命令列表（仅 included 中的），格式 + 描述 + 示例"""
         lines = []
-        order = ["help", "punish", "revoke", "history", "admin", "config"]
+        order = ["help", "punish_do", "punish_revoke", "punish_history", "admin", "config"]
         for internal in order:
             if internal not in include:
                 continue
@@ -661,7 +661,7 @@ class CommandHandler:
                              user_level: int, w: str) -> list[str]:
         """渲染命令列表：格式 + 描述 + 示例"""
         lines = []
-        order = ["help", "punish", "revoke", "history", "admin", "config"]
+        order = ["help", "punish_do", "punish_revoke", "punish_history", "admin", "config"]
         for internal in order:
             item = cc.commands.get(internal)
             if item is None or not self._cmd_visible(item, user_level):

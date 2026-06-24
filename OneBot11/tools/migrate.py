@@ -128,11 +128,13 @@ def migrate(data_dir: str):
     if not groups_data:
         # 没有管理组，创建一个默认配置
         config_dir = data / "default"
+        punish_dir = config_dir / "punish"
+        punish_dir.mkdir(parents=True, exist_ok=True)
         write_json(config_dir / "groups.json",
                    {"notifyGroup": None, "executionGroups": []})
-        write_json(config_dir / "records.json", records_data)
+        write_json(punish_dir / "records.json", records_data)
         write_json(config_dir / "permissions.json", permissions_data)
-        write_json(config_dir / "blacklist.json", blacklist_data)
+        write_json(punish_dir / "blacklist.json", blacklist_data)
         print("  无管理组数据，已创建 'default' 配置")
         return
 
@@ -170,7 +172,9 @@ def migrate(data_dir: str):
             fg = str(r.get("fromGroup", r.get("from_group", "")))
             if fg in group_set:
                 cfg_records.append(r)
-        write_json(config_dir / "records.json", cfg_records)
+        punish_dir = config_dir / "punish"
+        punish_dir.mkdir(parents=True, exist_ok=True)
+        write_json(punish_dir / "records.json", cfg_records)
 
         # 每配置复制一份 permissions
         write_json(config_dir / "permissions.json", permissions_data)
@@ -181,7 +185,7 @@ def migrate(data_dir: str):
             gn = str(b.get("groupName", b.get("group_name", "")))
             if gn == name:
                 cfg_blacklist.append(b)
-        write_json(config_dir / "blacklist.json", cfg_blacklist)
+        write_json(punish_dir / "blacklist.json", cfg_blacklist)
 
         print(f"  配置 '{name}': 通知群={admin or '无'}, "
               f"执行群={len(execs)}个, 记录={len(cfg_records)}条, "
@@ -201,10 +205,10 @@ def migrate(data_dir: str):
 
     if leftover_records:
         first_name = list(all_group_sets.keys())[0]
-        cfg_dir = data / first_name
-        existing = read_json(cfg_dir / "records.json") or []
+        punish_dir = data / first_name / "punish"
+        existing = read_json(punish_dir / "records.json") or []
         existing.extend(leftover_records)
-        write_json(cfg_dir / "records.json", existing)
+        write_json(punish_dir / "records.json", existing)
         print(f"  {len(leftover_records)} 条未归属记录放入配置 '{first_name}'")
 
     letfover_blacklist = []
@@ -215,10 +219,10 @@ def migrate(data_dir: str):
 
     if letfover_blacklist:
         first_name = list(all_group_sets.keys())[0]
-        cfg_dir = data / first_name
-        existing = read_json(cfg_dir / "blacklist.json") or []
+        punish_dir = data / first_name / "punish"
+        existing = read_json(punish_dir / "blacklist.json") or []
         existing.extend(letfover_blacklist)
-        write_json(cfg_dir / "blacklist.json", existing)
+        write_json(punish_dir / "blacklist.json", existing)
         print(f"  {len(letfover_blacklist)} 条未归属黑名单放入配置 '{first_name}'")
 
     print("=== 迁移完成 ===")

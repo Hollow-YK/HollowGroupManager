@@ -40,12 +40,12 @@ class CommandConfig(BaseModel):
     @classmethod
     def defaults(cls) -> "CommandConfig":
         return cls(commands={
-            "help":   CommandItem(enabled=True, names=["help"], min_level=-1),
-            "punish": CommandItem(enabled=True, names=["p", "punish"], min_level=1),
-            "revoke": CommandItem(enabled=True, names=["rp", "revoke"], min_level=1),
-            "history":CommandItem(enabled=True, names=["h", "history"], min_level=1),
-            "admin":  CommandItem(enabled=True, names=["a", "admin"], min_level=0),
-            "config": CommandItem(enabled=True, names=["config"], min_level=0, sub={
+            "help":           CommandItem(enabled=True, names=["help"], min_level=-1),
+            "punish_do":      CommandItem(enabled=True, names=["p", "punish"], min_level=1),
+            "punish_revoke":  CommandItem(enabled=True, names=["rp", "revoke"], min_level=1),
+            "punish_history": CommandItem(enabled=True, names=["h", "history"], min_level=1),
+            "admin":          CommandItem(enabled=True, names=["a", "admin"], min_level=0),
+            "config":         CommandItem(enabled=True, names=["config"], min_level=0, sub={
                 "new":    CommandItem(enabled=True),
                 "rename": CommandItem(enabled=True),
                 "notify": CommandItem(enabled=True),

@@ -2,7 +2,7 @@
 数据持久化 — JSON 文件读写，.tmp 原子写入，.bak 备份恢复。
 序列化/反序列化委托给 pydantic。
 
-多配置架构：每个配置一个子目录，包含独立的 5 个 JSON 文件。
+多配置架构：每个配置一个子目录，groups/command/permissions 在根，records/blacklist 在 punish/ 下。
 """
 import json
 import logging
@@ -155,16 +155,21 @@ class DataManager:
         p = self._config_dir(name) / "groups.json"
         self._write_file(p, info.model_dump(mode="json", by_alias=True))
 
-    # ==================== 单配置的 records.json ====================
+    # ==================== 单配置的 punish/records.json ====================
 
     _records_ta = TypeAdapter(list[PunishRecord])
 
+    def _punish_dir(self, name: str) -> Path:
+        p = self._config_dir(name) / "punish"
+        p.mkdir(parents=True, exist_ok=True)
+        return p
+
     def load_config_records(self, name: str) -> list[PunishRecord]:
-        p = self._config_dir(name) / "records.json"
+        p = self._punish_dir(name) / "records.json"
         return self._load_models_file(p, self._records_ta)
 
     def save_config_records(self, name: str, records: list[PunishRecord]):
-        p = self._config_dir(name) / "records.json"
+        p = self._punish_dir(name) / "records.json"
         self._save_models_file(p, records)
 
     # ==================== 单配置的 permissions.json ====================
@@ -187,16 +192,16 @@ class DataManager:
         p = self._config_dir(name) / "permissions.json"
         self._save_dict_file(p, {str(k): int(v) for k, v in permissions.items()})
 
-    # ==================== 单配置的 blacklist.json ====================
+    # ==================== 单配置的 punish/blacklist.json ====================
 
     _blacklist_ta = TypeAdapter(list[BlacklistItem])
 
     def load_config_blacklist(self, name: str) -> list[BlacklistItem]:
-        p = self._config_dir(name) / "blacklist.json"
+        p = self._punish_dir(name) / "blacklist.json"
         return self._load_models_file(p, self._blacklist_ta)
 
     def save_config_blacklist(self, name: str, blacklist: list[BlacklistItem]):
-        p = self._config_dir(name) / "blacklist.json"
+        p = self._punish_dir(name) / "blacklist.json"
         self._save_models_file(p, blacklist)
 
     # ==================== 全局 command.json（data/command.json） ====================
@@ -239,7 +244,7 @@ class DataManager:
     # ==================== 批量保存 ====================
 
     def save_config(self, name: str, state: "ConfigState"):
-        """保存一个配置的全部 5 个文件"""
+        """保存一个配置的全部文件（groups/command/permissions 于根，records/blacklist 于 punish/）"""
         self.save_config_info(name, state.info)
         self.save_config_commands(name, state.commands)
         self.save_config_records(name, state.records)
