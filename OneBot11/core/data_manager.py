@@ -108,10 +108,11 @@ class DataManager:
     # ==================== 配置目录管理 ====================
 
     def list_configs(self) -> list[str]:
-        """扫描 data/ 下所有配置子目录"""
+        """扫描 data/ 下所有配置子目录（含有 groups.json 的）"""
         names = sorted(
             d.name for d in self._dir.iterdir()
             if d.is_dir() and not d.name.startswith(".")
+            and (d / "groups.json").exists()
         )
         return names
 

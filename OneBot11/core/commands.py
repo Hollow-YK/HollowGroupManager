@@ -176,6 +176,18 @@ class CommandHandler:
             return item
         return None
 
+    def _get_cmd_item_with_sub(self, internal: str, configs: list[ConfigState]) -> Optional[CommandItem]:
+        """获取有 sub 的命令配置（用于子命令检查；配置优先但跳过无 sub 的）"""
+        for cfg in configs:
+            item = cfg.commands.commands.get(internal)
+            if item and item.enabled and item.sub is not None:
+                return item
+        # 全局回退
+        item = self.global_commands.commands.get(internal)
+        if item and item.enabled:
+            return item
+        return None
+
     def _get_sub_item(self, parent: CommandItem, sub_name: str) -> Optional[CommandItem]:
         """获取子命令配置"""
         if not parent.sub:
@@ -212,26 +224,36 @@ class CommandHandler:
 
     def _check_sub_command(self, internal: str, sub_name: str,
                            configs: list[ConfigState], user_level: int) -> bool:
-        """检查子命令是否可用"""
+        """检查子命令是否可用（遍历配置+全局，找有该子命令的）"""
         if not configs:
             return True
 
-        item = self._get_cmd_item(internal, configs)
-        if item is None:
-            return False
+        # 先查各配置，再看全局；跳过没有目标子命令的 item
+        for cfg in configs:
+            item = cfg.commands.commands.get(internal)
+            if item and item.enabled:
+                sub = self._get_sub_item(item, sub_name)
+                if sub and sub.enabled:
+                    min_lv = self._resolve_min_level(sub, item)
+                    if user_level == 0:
+                        return True
+                    if user_level == -1:
+                        return min_lv == -1
+                    return user_level <= min_lv
 
-        sub = self._get_sub_item(item, sub_name)
-        if sub is None:
-            return False
-        if not sub.enabled:
-            return False
+        # 全局回退
+        item = self.global_commands.commands.get(internal)
+        if item and item.enabled:
+            sub = self._get_sub_item(item, sub_name)
+            if sub and sub.enabled:
+                min_lv = self._resolve_min_level(sub, item)
+                if user_level == 0:
+                    return True
+                if user_level == -1:
+                    return min_lv == -1
+                return user_level <= min_lv
 
-        min_lv = self._resolve_min_level(sub, item)
-        if user_level == 0:
-            return True
-        if user_level == -1:
-            return min_lv == -1
-        return user_level <= min_lv
+        return False
 
     # ==================== 消息入口 ====================
 
