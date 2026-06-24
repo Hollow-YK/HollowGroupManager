@@ -533,27 +533,65 @@ class CommandHandler:
 
     def _build_overview_lines(self, w: str, configs: list[ConfigState],
                                sender_id: str) -> list[str]:
-        """按配置分组生成帮助概览"""
+        """概览：全局卡片 + 有自定义的配置各一卡片"""
         lines = [
-            "# 可用指令",
+            "= 可用指令",
             f"- 唤醒词: {', '.join(self.wake_words)}",
         ]
 
         if not configs:
-            gc = self.dm.load_global_commands()
             lines.append("@")
             lines.append("= ── 全局（当前群未关联配置）──")
-            lines += self._render_cmd_section(gc, -1, w)
+            lines += self._render_filtered_cmds(self.global_commands,
+                {"help", "punish", "revoke", "history", "admin", "config"}, -1, w)
             lines.append("@@")
             return lines
 
         lines.append(f"- 本群关联 {len(configs)} 个配置")
         lines.append("")
-        for cfg in configs:
-            cfg_level = 0 if sender_id in self.super_admins else cfg.permissions.get(sender_id, -1)
-            lv_label = "超级管理员（0）" if cfg_level == 0 else (
-                "普通成员（-1）" if cfg_level == -1 else f"管理员（{cfg_level}）")
 
+        ORDER = ["help", "punish", "revoke", "history", "admin", "config"]
+
+        # 分析每个命令在各配置中的自定义情况
+        customized_by: dict[str, set[str]] = {cmd: set() for cmd in ORDER}
+        for cfg in configs:
+            for cmd in ORDER:
+                if cfg.commands.commands.get(cmd) is not None:
+                    customized_by[cmd].add(cfg.name)
+
+        # 全局卡片：包含至少一个配置未自定义的命令（使用全局设定）
+        global_card_cmds = set()
+        per_cfg_cmds: dict[str, set[str]] = {cfg.name: set() for cfg in configs}
+        for cmd in ORDER:
+            custom_cfgs = customized_by[cmd]
+            all_names = {cfg.name for cfg in configs}
+            if custom_cfgs != all_names:
+                # 有配置使用全局 → 放入全局卡片
+                global_card_cmds.add(cmd)
+            for cfg_name in custom_cfgs:
+                per_cfg_cmds[cfg_name].add(cmd)
+
+        # 对发送者在各配置中的等级
+        def cfg_level(cfg: ConfigState) -> int:
+            return 0 if sender_id in self.super_admins else cfg.permissions.get(sender_id, -1)
+
+        # 全局卡片
+        if global_card_cmds:
+            # 用户在各配置中的最佳等级
+            levels = [cfg_level(cfg) for cfg in configs]
+            best_level = 0 if 0 in levels else max(levels)
+            lines.append("@")
+            lines.append("= ── 全局 ──")
+            lines += self._render_filtered_cmds(self.global_commands, global_card_cmds, best_level, w)
+            lines.append("@@")
+            lines.append("")
+
+        # 各配置卡片（含该配置自定义的命令，无自定义则空卡片）
+        for cfg in configs:
+            my_cmds = per_cfg_cmds[cfg.name]
+            level = cfg_level(cfg)
+            lv_label = "超级管理员（0）" if level == 0 else (
+                "普通成员（-1）" if level == -1 else f"管理员（{level}）")
             ng = cfg.info.notify_group or "未设"
             eg_count = len(cfg.info.execution_groups)
             lines.append("@")
@@ -561,8 +599,40 @@ class CommandHandler:
             lines.append(f"- 通知群: {ng}  |  执行群: {eg_count}个  |  记录: {len(cfg.records)}条"
                          f"  |  我的权限: {lv_label}")
             lines.append("")
-            lines += self._render_cmd_section(self._resolved_commands(cfg), cfg_level, w)
+            resolved = self._resolved_commands(cfg)
+            lines += self._render_filtered_cmds(resolved, my_cmds, level, w)
             lines.append("@@")
+            lines.append("")
+        return lines
+
+    def _render_filtered_cmds(self, cc: "CommandConfig", include: set[str],
+                               user_level: int, w: str) -> list[str]:
+        """渲染指定命令列表（仅 included 中的），格式 + 描述 + 示例"""
+        lines = []
+        order = ["help", "punish", "revoke", "history", "admin", "config"]
+        for internal in order:
+            if internal not in include:
+                continue
+            item = cc.commands.get(internal)
+            if item is None or not self._cmd_visible(item, user_level):
+                continue
+            primary = self._primary_cmd_name(item)
+            aliases = item.names[1:] if len(item.names) > 1 else []
+            desc = self._CMD_DESC.get(internal, "")
+            min_str = ""
+            if item.min_level is not None and item.min_level != -1:
+                min_str = f"  ·需等级 {item.min_level}"
+
+            fmt = self._CMD_FORMAT.get(internal, "")
+            if fmt:
+                fmt = fmt.replace("{w}", w).replace("{cmd}", primary)
+                lines.append(f"> {fmt}{min_str}")
+            if aliases:
+                lines.append(f"- 别名: {' '.join(f'{w}{a}' for a in aliases)}")
+            lines.append(f"- {desc}")
+            examples = self._CMD_EXAMPLES.get(internal, [])
+            for ex in examples[:2]:
+                lines.append(f"~ {ex.replace('{w}', w).replace('{cmd}', primary)}")
             lines.append("")
         return lines
 
