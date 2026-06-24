@@ -135,7 +135,6 @@ async def main():
 
     # ---- 数据 ----
     dm = DataManager(pl.get("data_dir", "data"))
-    dm.check_all()
 
     # ---- 指令 ----
     cmd = CommandHandler(

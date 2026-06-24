@@ -1,7 +1,8 @@
 """
 数据模型 — pydantic BaseModel，自动序列化/校验，snake_case ↔ camelCase
 """
-from typing import Any
+from dataclasses import dataclass, field
+from typing import Any, Optional, List, Dict
 
 from pydantic import BaseModel, Field, model_validator
 
@@ -12,13 +13,24 @@ def _to_camel(name: str) -> str:
     return parts[0] + "".join(p.title() for p in parts[1:])
 
 
-class ManagementGroup(BaseModel):
-    """管理组"""
-    name: str = ""
-    admin_group: str = Field(default="", alias="adminGroup")
+class ConfigInfo(BaseModel):
+    """单个配置的群组信息"""
+    notify_group: Optional[str] = Field(default=None, alias="notifyGroup")
     execution_groups: set[str] = Field(default_factory=set, alias="executionGroups")
 
     model_config = {"populate_by_name": True, "alias_generator": _to_camel}
+
+
+@dataclass
+class ConfigState:
+    """单个配置的运行时完整状态"""
+    name: str
+    info: ConfigInfo = field(default_factory=ConfigInfo)
+    records: List["PunishRecord"] = field(default_factory=list)
+    records_by_id: Dict[int, "PunishRecord"] = field(default_factory=dict)
+    permissions: Dict[str, int] = field(default_factory=dict)
+    blacklist: List["BlacklistItem"] = field(default_factory=list)
+    next_rid: int = 1
 
 
 class PunishRecord(BaseModel):

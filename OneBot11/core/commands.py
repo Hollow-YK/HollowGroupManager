@@ -1,5 +1,5 @@
 """
-指令实现：/help, /p, /rp, /h, /a, /group
+指令实现：/help, /p, /rp, /h, /a, /config
 """
 import re
 import time
@@ -7,7 +7,7 @@ import logging
 from datetime import datetime
 from typing import Optional, List, TYPE_CHECKING
 
-from .models import ManagementGroup, PunishRecord, BlacklistItem
+from .models import ConfigInfo, ConfigState, PunishRecord, BlacklistItem
 from .data_manager import DataManager
 from .render import render_help, render_record_table
 
@@ -15,6 +15,8 @@ if TYPE_CHECKING:
     from bot.api import OneBotAPI
 
 logger = logging.getLogger("Hollow.Cmd")
+
+VALID_METHODS = ("kick", "mute", "warn")
 
 
 class CommandHandler:
@@ -30,55 +32,106 @@ class CommandHandler:
         self.render_enabled = render_enabled
         self.primary_wake = wake_words[0] if wake_words else "/"
 
-        # 运行时数据
-        self.groups: dict[str, ManagementGroup] = {}
-        self.records: List[PunishRecord] = []
-        self.records_by_id: dict[int, PunishRecord] = {}
-        self.permissions: dict[str, int] = {}
-        self.blacklist: List[BlacklistItem] = []
-        self._next_rid: int = 1
+        # 多配置运行时数据
+        self.configs: dict[str, ConfigState] = {}
 
     # ==================== 生命周期 ====================
 
     def load(self):
-        self.groups = self.dm.load_groups()
-        self.records = self.dm.load_records()
-        self.permissions = self.dm.load_permissions()
-        self.blacklist = self.dm.load_blacklist()
+        self.dm.check_all()
+        self.configs.clear()
 
-        max_id = 0
-        self.records_by_id.clear()
-        for r in self.records:
-            self.records_by_id[r.id] = r
-            if r.id > max_id:
-                max_id = r.id
-        self._next_rid = max_id + 1
-        logger.info(f"已加载: {len(self.groups)}管理组 {len(self.records)}记录 "
-                    f"{len(self.permissions)}权限 {len(self.blacklist)}黑名单")
+        for name in self.dm.list_configs():
+            info = self.dm.load_config_info(name)
+            records = self.dm.load_config_records(name)
+            permissions = self.dm.load_config_permissions(name)
+            blacklist = self.dm.load_config_blacklist(name)
+
+            records_by_id: dict[int, PunishRecord] = {}
+            max_id = 0
+            for r in records:
+                records_by_id[r.id] = r
+                if r.id > max_id:
+                    max_id = r.id
+
+            self.configs[name] = ConfigState(
+                name=name,
+                info=info,
+                records=records,
+                records_by_id=records_by_id,
+                permissions=permissions,
+                blacklist=blacklist,
+                next_rid=max_id + 1,
+            )
+
+        total_records = sum(len(c.records) for c in self.configs.values())
+        logger.info(f"已加载: {len(self.configs)} 配置 {total_records} 记录")
 
     def save(self):
-        self.dm.save_groups(self.groups)
-        self.dm.save_records(self.records)
-        self.dm.save_permissions(self.permissions)
-        self.dm.save_blacklist(self.blacklist)
+        for name, state in self.configs.items():
+            self.dm.save_config(name, state)
 
     # ==================== 权限 ====================
 
     def _level(self, qq: str) -> int:
         if qq in self.super_admins:
             return 0
-        return self.permissions.get(qq, -1)
+        # 在权限系统中查找（返回任意配置里的最高权限）
+        best = -1
+        for cfg in self.configs.values():
+            lv = cfg.permissions.get(qq, -1)
+            if lv > best:
+                best = lv
+        return best
 
-    # ==================== 查找 ====================
+    # ==================== 配置查找 ====================
 
-    def _find_group(self, group_id: str) -> Optional[ManagementGroup]:
-        for g in self.groups.values():
-            if g.admin_group == group_id or group_id in g.execution_groups:
-                return g
-        return None
+    def _find_configs(self, group_id: str) -> list[ConfigState]:
+        """查找包含此群的所有配置"""
+        result = []
+        for cfg in self.configs.values():
+            if (cfg.info.notify_group and cfg.info.notify_group == group_id) or \
+               group_id in cfg.info.execution_groups:
+                result.append(cfg)
+        return result
 
-    def _find_by_name(self, name: str) -> Optional[ManagementGroup]:
-        return self.groups.get(name)
+    def _get_config(self, name: str) -> Optional[ConfigState]:
+        return self.configs.get(name)
+
+    def _resolve_config_name(self, group_id: str, parts: List[str],
+                              idx: int) -> tuple[Optional[ConfigState], int]:
+        """尝试从 parts[idx] 解析配置名，若匹配则返回 (ConfigState, idx+1)"""
+        if idx >= len(parts):
+            return None, idx
+        cfg = self._get_config(parts[idx])
+        if cfg is not None:
+            return cfg, idx + 1
+        return None, idx
+
+    def _require_config_for_group(self, group_id: str, cmd_name: str,
+                                   config_name: Optional[str] = None) -> Optional[list[ConfigState]]:
+        """
+        获取当前群对应的配置列表。
+        - 0 配置 → 返回 None（不响应）
+        - 1 配置 → 返回该配置
+        - ≥2 配置 → 若有 config_name 则返回指定配置，否则返回 None 表示需报错
+        """
+        configs = self._find_configs(group_id)
+        if not configs:
+            return None
+
+        if config_name:
+            cfg = self._get_config(config_name)
+            if cfg is None:
+                return None  # 配置不存在
+            if cfg not in configs:
+                return None  # 指定配置不包含此群
+            return [cfg]
+
+        if len(configs) >= 2:
+            return None  # 需要指定配置名
+
+        return configs
 
     # ==================== 消息入口 ====================
 
@@ -124,8 +177,8 @@ class CommandHandler:
             return await self._query(level, group_id, parts, at_list)
         elif cmd == "a":
             return await self._permission(level, sender_id, group_id, parts, at_list)
-        elif cmd == "group":
-            return await self._group_cmd(level, sender_id, group_id, parts)
+        elif cmd == "config":
+            return await self._config_cmd(level, sender_id, group_id, parts)
 
         return None
 
@@ -137,39 +190,33 @@ class CommandHandler:
         group_id = str(event.get("group_id", ""))
         user_id = str(event.get("user_id", ""))
 
-        mg = self._find_group(group_id)
-        if mg is None:
+        configs = self._find_configs(group_id)
+        if not configs:
             return
 
-        matched = None
-        for b in self.blacklist:
-            if b.qq == int(user_id) and b.group_name == mg.name:
-                matched = b
+        uid = int(user_id)
+        kicked = False
+        for cfg in configs:
+            for b in cfg.blacklist:
+                if b.qq == uid and b.group_name == cfg.name:
+                    try:
+                        gid = int(group_id)
+                        ok = await self.api.set_group_kick(gid, uid, reject_add_request=False)
+                        if ok:
+                            await self.api.send_group_msg(gid,
+                                f"[CQ:at,qq={user_id}] 在配置 {cfg.name} 黑名单中，已自动移出。原因：{b.reason}")
+                            kicked = True
+                    except Exception as e:
+                        logger.error(f"黑名单踢人异常: {e}")
+                    break
+            if kicked:
                 break
-
-        if matched is None:
-            return
-
-        try:
-            gid = int(group_id)
-            uid = int(user_id)
-            ok = await self.api.set_group_kick(gid, uid, reject_add_request=False)
-            if not ok:
-                logger.error(f"黑名单踢人失败: {user_id}")
-                return
-
-            await self.api.send_group_msg(gid,
-                f"[CQ:at,qq={user_id}] 在管理组黑名单中，已自动移出。原因：{matched.reason}")
-        except Exception as e:
-            logger.error(f"黑名单踢人异常: {e}")
 
     # ==================== 辅助 ====================
 
     @staticmethod
     def _extract_at(event: dict) -> List[str]:
-        """从消息中提取 at 的 QQ 号"""
         ats = []
-        # OneBot v11: message 中包含 [CQ:at,qq=xxx]
         raw = event.get("raw_message", event.get("message", ""))
         for m in re.finditer(r'\[CQ:at,qq=(\d+)\]', str(raw)):
             qq = m.group(1)
@@ -186,7 +233,6 @@ class CommandHandler:
 
     @staticmethod
     def _parse_duration(dur: str) -> Optional[int]:
-        """解析时长 → 秒数"""
         if not dur or not dur.strip():
             return None
         dur = dur.strip()
@@ -213,17 +259,18 @@ class CommandHandler:
             return at_list[0]
         return self._extract_qq(text)
 
-    async def _notify_admin(self, mg: Optional[ManagementGroup], msg: str):
-        if mg and mg.admin_group:
+    async def _notify_admin(self, cfg: ConfigState, msg: str):
+        """通知配置的通知群"""
+        ng = cfg.info.notify_group
+        if ng:
             try:
-                await self.api.send_group_msg(int(mg.admin_group), msg)
+                await self.api.send_group_msg(int(ng), msg)
             except Exception as e:
-                logger.error(f"通知管理群失败: {e}")
+                logger.error(f"通知通知群失败: {e}")
 
     # ==================== 图片渲染（Pillow） ====================
 
     def _render_png(self, maker) -> Optional[bytes]:
-        """调用 Pillow 渲染函数，失败返回 None"""
         if not self.render_enabled:
             return None
         try:
@@ -237,7 +284,6 @@ class CommandHandler:
             return None
 
     async def _send_image(self, group_id: int, png_bytes: bytes):
-        """通过 OneBot base64 发送图片"""
         import base64
         b64 = base64.b64encode(png_bytes).decode()
         await self.api.send_group_msg(group_id, f"[CQ:image,file=base64://{b64}]")
@@ -245,7 +291,6 @@ class CommandHandler:
     # ==================== /help ====================
 
     async def _help(self, level: int, group_id: str, parts: List[str]) -> str:
-        """渲染帮助图片（Pillow 直接绘制）"""
         w = self.primary_wake
         is_super = (level == 0)
         level_text = f"权限: {level}" + (
@@ -256,9 +301,9 @@ class CommandHandler:
             title = "HollowGroupManager 帮助"
         else:
             command = parts[1].lower()
-            if command not in ("help", "p", "rp", "h", "a", "group"):
-                return f"未知命令：{command}，可用：help, p, rp, h, a, group"
-            if command in ("a", "group") and not is_super:
+            if command not in ("help", "p", "rp", "h", "a", "config"):
+                return f"未知命令：{command}，可用：help, p, rp, h, a, config"
+            if command in ("a", "config") and not is_super:
                 return "此命令仅超级管理员可用"
             lines = self._build_detail_lines(w, command)
             title = f"帮助 — {w}{command}"
@@ -276,24 +321,24 @@ class CommandHandler:
             f"> {w}help [命令]",
             "- 查看帮助，可指定命令查看详细用法",
             f"~ {w}help p", "",
-            f"> {w}p <目标> <方式> [内容] <原因>",
+            f"> {w}p <目标> [配置] <方式> [内容] <原因>",
             "- 处罚成员：kick / mute / warn。目标支持 @某人 或 QQ号",
             f"~ {w}p @某人 mute 1d2h 广告", "",
-            f"> {w}rp <记录ID> [撤销原因]",
+            f"> {w}rp [配置] <记录ID> [撤销原因]",
             "- 撤销处罚记录",
-            f"~ {w}rp 5 误判", "",
-            f"> {w}h [目标] [-i]",
+            f"~ {w}rp 5  /  {w}rp 反馈组 5 误判", "",
+            f"> {w}h [配置] [目标] [-i]",
             "- 查询处罚记录，无参数=全组表格，-i=图片表格详情",
-            f"~ {w}h  /  {w}h @某人  /  {w}h 123456 -i",
+            f"~ {w}h  /  {w}h @某人  /  {w}h 反馈组 123456 -i",
         ]
         if is_super:
             lines += [
-                "", f"> {w}a <目标> [1/-1]",
+                "", f"> {w}a [配置] <目标> [1/-1]",
                 "- 设置成员权限，1=管理员，-1=普通成员",
-                f"~ {w}a @某人 1", "",
-                f"> {w}group <子命令>",
-                "- 管理组配置：admin / set / remove / info",
-                f"~ {w}group admin 反馈组",
+                f"~ {w}a @某人 1  /  {w}a 反馈组 @某人 1", "",
+                f"> {w}config <子命令>",
+                "- 配置管理：new / rename / admin / set / remove / group",
+                f"~ {w}config new 反馈组",
             ]
         return lines
 
@@ -302,133 +347,175 @@ class CommandHandler:
             "help": [f"# {w}help — 查看帮助", f"> {w}help [命令]",
                      f"~ {w}help  → 概览  /  {w}help p  → 详情"],
             "p": [f"# {w}p — 处罚成员", "! 权限：超级管理员 / 管理员",
-                  f"> {w}p <目标> <方式> [内容] <原因>",
+                  f"> {w}p <目标> [配置] <方式> [内容] <原因>",
                   "- <目标>  @某人 或 QQ号",
+                  "- [配置]  指定配置名（可选，不填=当前群所有配置）",
                   "- <方式>  kick / mute / warn",
                   "- [内容]  kick可选f(黑名单)；mute必填时长；warn不需要",
                   "- <原因>  缺失时记为不合规，不执行",
                   "# 时长格式", "- 纯数字=天  组合 1d2h30m",
                   "# 三步检查", "- 成员在群 → 状态检查 → 执行",
                   f"~ {w}p @某人 mute 1d2h 广告刷屏",
-                  f"~ {w}p 123456 kick f 严重违规"],
+                  f"~ {w}p 123456 kick f 严重违规",
+                  f"~ {w}p @某人 反馈组 warn 注意言辞"],
             "rp": [f"# {w}rp — 撤销处罚", "! 权限：超级管理员 / 管理员",
-                   f"> {w}rp <记录ID> [撤销原因]",
+                   f"> {w}rp [配置] <记录ID> [撤销原因]",
+                   "- [配置]  多配置群必填，单配置群可选",
                    "! 仅可撤销已执行/执行失败/部分失败的记录",
-                   f"~ {w}rp 5  /  {w}rp 5 误判"],
+                   f"~ {w}rp 5  /  {w}rp 反馈组 5 误判"],
             "h": [f"# {w}h — 查询记录", "! 权限：超级管理员 / 管理员",
-                  f"> {w}h [目标] [-i]",
+                  f"> {w}h [配置] [目标] [-i]",
+                  "- [配置]  指定配置名（多配置群必填）",
                   "- 无参数  全部记录表格",
                   "- 指定目标  汇总统计",
                   "- -i  图片表格详情",
                   "! 状态颜色：绿已执行 橙已撤销 红失败 灰不合规",
-                  f"~ {w}h  /  {w}h @某人  /  {w}h 123456 -i"],
+                  f"~ {w}h  /  {w}h @某人  /  {w}h 反馈组 123456 -i"],
             "a": [f"# {w}a — 设置权限", "! 权限：仅超级管理员",
-                  f"> {w}a <目标> [1/-1]",
+                  f"> {w}a [配置] <目标> [1/-1]",
+                  "- [配置]  指定配置名（多配置群必填）",
                   "- 1=管理员(默认)  -1=普通成员",
                   "! 不可设0，不可改自己",
-                  f"~ {w}a @某人  /  {w}a 123456 -1"],
-            "group": [f"# {w}group — 管理组配置", "! 权限：仅超级管理员",
-                      f"> {w}group <子命令>",
-                      "- admin <组名>  创建管理组",
-                      "- set <组名>  加入为执行群",
-                      "- remove  移出管理组",
-                      "- info  查看信息",
-                      f"~ {w}group admin 反馈组"],
+                  f"~ {w}a @某人  /  {w}a 反馈组 123456 -1"],
+            "config": [f"# {w}config — 配置管理", "! 权限：仅超级管理员",
+                       f"> {w}config new <名称>         创建新配置",
+                       f"> {w}config rename <旧> <新>    重命名配置",
+                       f"> {w}config <名称> admin       设本群为通知群",
+                       f"> {w}config <名称> set         本群加入执行群",
+                       f"> {w}config <名稱> remove      本群移出配置",
+                       f"> {w}config <名称> group       查看配置信息",
+                       "! 一个群可属于多个配置",
+                       "! 通知群也可设为执行群",
+                       f"~ {w}config new 反馈组",
+                       f"~ {w}config 反馈组 admin",
+                       f"~ {w}config 反馈组 set"],
         }
         return detail.get(cmd, [f"未知命令: {cmd}"])
 
     def _help_fallback_text(self, w: str, is_super: bool, cmd: Optional[str]) -> str:
-        if cmd and cmd not in ("help","p","rp","h","a","group"):
-            return f"未知命令：{cmd}，可用：help, p, rp, h, a, group"
+        if cmd and cmd not in ("help", "p", "rp", "h", "a", "config"):
+            return f"未知命令：{cmd}，可用：help, p, rp, h, a, config"
         lines = [f"=== HollowGroupManager 帮助 ===",
                  f"唤醒词: {', '.join(self.wake_words)}", "",
                  f"{w}help [命令]  查看帮助",
-                 f"{w}p <目标> <方式> [内容] <原因>  处罚",
-                 f"{w}rp <记录ID> [原因]  撤销",
-                 f"{w}h [目标] [-i]  查询"]
+                 f"{w}p <目标> [配置] <方式> [内容] <原因>  处罚",
+                 f"{w}rp [配置] <记录ID> [原因]  撤销",
+                 f"{w}h [配置] [目标] [-i]  查询"]
         if is_super:
-            lines += [f"{w}a <目标> [1/-1]  权限(超管)",
-                      f"{w}group <子命令>  管理组(超管)"]
+            lines += [f"{w}a [配置] <目标> [1/-1]  权限(超管)",
+                      f"{w}config <子命令>  配置(超管)"]
         return "\n".join(lines)
 
     # ==================== /p 处罚 ====================
 
     async def _punish(self, level: int, sender_id: str, group_id: str,
                       parts: List[str], at_list: List[str]) -> str:
-        if len(parts) < 4:
-            return "格式：<唤醒词>p <目标> <方式> [内容] <原因>"
+        if len(parts) < 2:
+            return "格式：<唤醒词>p <目标> [配置] <方式> [内容] <原因>"
 
+        # 解析目标
         target_qq = self._resolve_target(at_list, parts[1])
         if not target_qq:
             return "未找到被处罚者QQ，请 @ 或输入QQ号"
 
-        method = parts[2].lower()
-        if method not in ("kick", "mute", "warn"):
+        # 尝试解析配置名（parts[2] 若不是方式则视为配置名）
+        cfg_name: Optional[str] = None
+        method_idx = 2
+        if len(parts) > 2 and parts[2].lower() not in VALID_METHODS:
+            cfg_name = parts[2]
+            method_idx = 3
+
+        # 确定配置范围
+        match_cfgs = self._find_configs(group_id)
+        if not match_cfgs:
+            return None  # 不响应
+
+        if cfg_name:
+            target_cfgs = [c for c in match_cfgs if c.name == cfg_name]
+            if not target_cfgs:
+                return f"配置 \"{cfg_name}\" 不存在或不包含本群"
+        else:
+            target_cfgs = match_cfgs
+
+        # 解析方式和内容
+        if method_idx >= len(parts):
+            return "缺少处罚方式（kick / mute / warn）"
+        method = parts[method_idx].lower()
+        if method not in VALID_METHODS:
             return "无效处罚方式，可选：kick, mute, warn"
 
         content = ""
+        reason_start = method_idx + 1
         if method == "mute":
-            if len(parts) < 5:
+            if len(parts) < method_idx + 2:
                 return "禁言缺少时长"
-            content = parts[3]
-            reason_start = 4
+            content = parts[method_idx + 1]
+            reason_start = method_idx + 2
             if self._parse_duration(content) is None:
                 return "时长格式错误，支持数字(天)或组合如1d2h30m"
         elif method == "kick":
-            if len(parts) >= 4 and parts[3].lower() == "f":
-                content = "f"; reason_start = 4
+            if len(parts) > method_idx + 1 and parts[method_idx + 1].lower() == "f":
+                content = "f"
+                reason_start = method_idx + 2
             else:
-                content = ""; reason_start = 3
-        else:
-            content = ""; reason_start = 3
+                reason_start = method_idx + 1
 
+        # 原因检查
         if reason_start >= len(parts):
-            r = self._add_record(sender_id, group_id, int(target_qq),
-                                 method, content, "", "不合规")
-            mg = self._find_group(group_id)
-            await self._notify_admin(mg,
-                f"[不合规] 处罚（{r.id}）：发起者（{sender_id}）在群（{group_id}）"
-                f"发起的处罚缺少原因，未执行。")
+            # 不合规
+            records_info = []
+            for cfg in target_cfgs:
+                r = self._add_record(cfg.name, sender_id, group_id, int(target_qq),
+                                     method, content, "", "不合规")
+                records_info.append((cfg, r))
+                await self._notify_admin(cfg,
+                    f"[不合规] 处罚（{r.id}）：发起者（{sender_id}）在群（{group_id}）"
+                    f"发起的处罚缺少原因，未执行。")
             self.save()
             return "原因缺失，已记录为[不合规]，未执行处罚。"
 
         reason = " ".join(parts[reason_start:])
 
-        mg = self._find_group(group_id)
-        if mg is None:
-            return "当前群不属于任何管理组，无法执行。"
-
-        r = self._add_record(sender_id, group_id, int(target_qq),
-                             method, content, reason, "执行中")
+        # 收集执行群（去重）
+        all_exec_groups: set[str] = set()
+        for cfg in target_cfgs:
+            all_exec_groups.update(cfg.info.execution_groups)
 
         gid_int = int(group_id)
         tid_int = int(target_qq)
+
+        # 创建记录
+        records_info: list[tuple[ConfigState, PunishRecord]] = []
+        for cfg in target_cfgs:
+            r = self._add_record(cfg.name, sender_id, group_id, tid_int,
+                                 method, content, reason, "执行中")
+            records_info.append((cfg, r))
+
+        # 执行处罚
         any_ok = False
         any_fail = False
         fail_groups: List[str] = []
 
-        for eg in list(mg.execution_groups):
+        for eg in list(all_exec_groups):
             eg_int = int(eg)
-            # 第一步
             if not await self.api.is_member_in_group(eg_int, tid_int):
                 continue
-            # 第二步
             if method == "mute":
                 muted = await self.api.get_muted_members(eg_int)
                 for mm in muted:
                     if mm["user_id"] == tid_int:
-                        await self._notify_admin(mg,
-                            f"[提示] 处罚「{r.id}」在群{eg}成员{target_qq}已被禁言，将更新时长。")
+                        for cfg, r in records_info:
+                            await self._notify_admin(cfg,
+                                f"[提示] 处罚「{r.id}」在群{eg}成员{target_qq}已被禁言，将更新时长。")
                         break
-            # 第三步
             try:
                 if method == "kick":
-                    ok = await self.api.set_group_kick(eg_int, tid_int,
-                                                       content == "f")
+                    ok = await self.api.set_group_kick(eg_int, tid_int, content == "f")
                     if not ok:
                         raise RuntimeError("踢出返回失败")
                     if content == "f":
-                        self._blacklist_add(tid_int, reason, mg.name)
+                        for cfg in target_cfgs:
+                            self._blacklist_add(cfg.name, tid_int, reason, cfg.name)
                     any_ok = True
                 elif method == "mute":
                     sec = self._parse_duration(content)
@@ -441,66 +528,124 @@ class CommandHandler:
             except Exception as e:
                 any_fail = True
                 fail_groups.append(eg)
-                await self._notify_admin(mg,
-                    f"[异常] 处罚「{r.id}」在群{eg}执行失败：{e}")
+                for cfg, r in records_info:
+                    await self._notify_admin(cfg,
+                        f"[异常] 处罚「{r.id}」在群{eg}执行失败：{e}")
 
-        if any_fail and not any_ok:
-            r.status = "执行失败"
-            r.fail_detail = "失败群：" + ",".join(fail_groups)
-        elif any_fail:
-            r.status = "部分失败"
-            r.fail_detail = "失败群：" + ",".join(fail_groups)
-        else:
-            r.status = "已执行"
+        # 更新状态
+        fail_str = "失败群：" + ",".join(fail_groups) if fail_groups else ""
+        for cfg, r in records_info:
+            if any_fail and not any_ok:
+                r.status = "执行失败"
+                r.fail_detail = fail_str
+            elif any_fail:
+                r.status = "部分失败"
+                r.fail_detail = fail_str
+            else:
+                r.status = "已执行"
 
-        if any_fail and not any_ok:
-            fb = "处罚执行失败，失败群：" + ",".join(fail_groups)
-        elif any_fail:
-            fb = "处罚部分失败，失败群：" + ",".join(fail_groups)
-        else:
-            fb = "处罚已执行。"
-
-        await self._notify_admin(mg,
-            f"处罚「{r.id}」：{sender_id}在{group_id}发起对"
-            f"{target_qq}的「{r.describe()}」处罚，原因：「{reason}」，"
-            f"状态：{r.status}" +
-            (f"（{r.fail_detail}）" if r.fail_detail else ""))
+        # 通知
+        notified: set[str] = set()
+        for cfg, r in records_info:
+            ng = cfg.info.notify_group
+            if ng and ng not in notified:
+                notified.add(ng)
+                fb = "处罚已执行。" if not fail_str else f"处罚部分失败（{fail_str}）"
+                if any_fail and not any_ok:
+                    fb = f"处罚执行失败（{fail_str}）"
+                try:
+                    await self.api.send_group_msg(int(ng),
+                        f"处罚「{r.id}」：{sender_id}在{group_id}发起对"
+                        f"{target_qq}的「{r.describe()}」处罚，原因：「{reason}」，"
+                        f"状态：{r.status}" +
+                        (f"（{r.fail_detail}）" if r.fail_detail else ""))
+                except Exception:
+                    pass
 
         self.save()
-        return fb
+
+        if any_fail and not any_ok:
+            return f"处罚执行失败，{fail_str}"
+        elif any_fail:
+            return f"处罚部分失败，{fail_str}"
+        return f"处罚已执行。（{len(target_cfgs)} 配置）"
 
     # ==================== /rp 撤销 ====================
 
     async def _revoke(self, level: int, sender_id: str, group_id: str,
                       parts: List[str]) -> str:
         if len(parts) < 2:
-            return "格式：/rp <记录ID> [撤销原因]"
+            return "格式：/rp [配置] <记录ID> [撤销原因]"
+
+        match_cfgs = self._find_configs(group_id)
+        if not match_cfgs:
+            return None
+
+        # 解析配置名
+        cfg_name: Optional[str] = None
+        id_idx = 1
+        cfg = self._get_config(parts[1])
+        if cfg is not None:
+            cfg_name = parts[1]
+            id_idx = 2
+        elif len(match_cfgs) >= 2:
+            return "本群属于多个配置，请指定配置名称：/rp <配置名称> <记录ID> [撤销原因]"
+
+        if id_idx >= len(parts):
+            return "缺少记录ID"
+
         try:
-            rid = int(parts[1])
+            rid = int(parts[id_idx])
         except ValueError:
             return "记录ID必须为数字"
 
-        target = self.records_by_id.get(rid)
+        # 查找记录
+        rr = " ".join(parts[id_idx + 1:])
+
+        if cfg_name:
+            target_cfg = self._get_config(cfg_name)
+            if target_cfg is None:
+                return f"配置 \"{cfg_name}\" 不存在"
+            target = target_cfg.records_by_id.get(rid)
+            if target is None:
+                return f"配置 \"{cfg_name}\" 中不存在记录 {rid}"
+            cfgs_to_search = [target_cfg]
+        else:
+            target = None
+            cfgs_to_search = match_cfgs
+            for c in cfgs_to_search:
+                target = c.records_by_id.get(rid)
+                if target is not None:
+                    break
+
         if target is None:
             return "记录不存在"
+
+        # 找到记录所属配置
+        owner_cfg = None
+        for c in self.configs.values():
+            if rid in c.records_by_id:
+                owner_cfg = c
+                break
+
+        if owner_cfg is None:
+            return "记录对应配置异常"
+
         if target.status not in ("已执行", "执行失败", "部分失败"):
             return f"状态为 {target.status}，不可撤销"
-
-        rr = " ".join(parts[2:]) if len(parts) >= 3 else ""
-        mg = self._find_group(target.from_group)
-        if mg is None:
-            return "记录对应管理组异常"
 
         any_ok = False
         skip: List[str] = []
         fail: List[str] = []
 
         if target.method == "mute":
-            for eg in list(mg.execution_groups):
-                eg_int = int(eg); tid_int = target.target
+            for eg in list(owner_cfg.info.execution_groups):
+                eg_int = int(eg)
+                tid_int = target.target
                 try:
                     if not await self.api.is_member_in_group(eg_int, tid_int):
-                        skip.append(f"{eg}(成员不存在)"); continue
+                        skip.append(f"{eg}(成员不存在)")
+                        continue
                     ok = await self.api.set_group_ban(eg_int, tid_int, 0)
                     if ok:
                         any_ok = True
@@ -508,13 +653,12 @@ class CommandHandler:
                         fail.append(eg)
                 except Exception as e:
                     fail.append(eg)
-                    await self._notify_admin(mg,
+                    await self._notify_admin(owner_cfg,
                         f"[异常] 撤销（{target.id}）在群（{eg}）失败：{e}")
             if not any_ok and fail:
                 return "撤销失败，失败群：" + ",".join(fail)
-
         elif target.method == "kick" and target.content == "f":
-            self._blacklist_remove(target.target, mg.name)
+            self._blacklist_remove(owner_cfg.name, target.target, owner_cfg.name)
             any_ok = True
 
         target.status = "已撤销"
@@ -525,7 +669,7 @@ class CommandHandler:
         if skip:
             msg += "（跳过：" + ", ".join(skip) + "）"
 
-        await self._notify_admin(mg,
+        await self._notify_admin(owner_cfg,
             f"[撤销] 处罚（{target.id}）已被（{sender_id}）撤销，"
             f"原处罚：（{target.target}）的（{target.describe()}），"
             f"原因：（{target.reason}）。撤销原因：" + (rr or "无"))
@@ -537,25 +681,48 @@ class CommandHandler:
 
     async def _query(self, level: int, group_id: str,
                      parts: List[str], at_list: List[str]) -> str:
-        mg = self._find_group(group_id)
-        if mg is None:
-            return "当前群不属于管理组"
+        match_cfgs = self._find_configs(group_id)
+        if not match_cfgs:
+            return None
 
-        all_in_group = [r for r in self.records
-                        if r.from_group == group_id
-                        or r.from_group in mg.execution_groups
-                        or mg.admin_group == r.from_group]
+        # 解析配置名
+        cfg_name: Optional[str] = None
+        rest_start = 1
+        cfg = self._get_config(parts[1]) if len(parts) > 1 else None
+        if cfg is not None:
+            cfg_name = parts[1]
+            rest_start = 2
+        elif len(match_cfgs) >= 2:
+            return "本群属于多个配置，请指定配置名称：/h <配置名称> [QQ用户] [-i]"
 
-        if len(parts) < 2:
-            return await self._render_table(all_in_group, group_id)
+        # 确定查询的配置
+        if cfg_name:
+            target_cfgs = [c for c in match_cfgs if c.name == cfg_name]
+            if not target_cfgs:
+                return f"配置 \"{cfg_name}\" 不存在或不包含本群"
+        else:
+            target_cfgs = match_cfgs
 
-        target_qq = self._resolve_target(at_list, parts[1])
+        # 收集记录
+        all_records: list[PunishRecord] = []
+        for c in target_cfgs:
+            all_records.extend(c.records)
+
+        # 无参数 → 全表
+        if len(parts) < rest_start + 1:
+            return await self._render_table(all_records, group_id)
+
+        # 解析目标
+        target_qq = self._resolve_target(at_list, parts[rest_start])
         if not target_qq:
+            # 可能是 -i（无目标的详情）
+            if parts[rest_start] == "-i":
+                return await self._render_table(all_records, group_id)
             return "未找到目标QQ"
 
         tid = int(target_qq)
-        filtered = [r for r in all_in_group if r.target == tid]
-        detail = len(parts) > 2 and parts[2] == "-i"
+        filtered = [r for r in all_records if r.target == tid]
+        detail = len(parts) > rest_start + 1 and parts[rest_start + 1] == "-i"
 
         if detail:
             return await self._render_table(filtered, group_id)
@@ -596,7 +763,6 @@ class CommandHandler:
             await self._send_image(int(group_id), png)
             return ""
 
-        # 回退纯文本
         fmt = "%m-%d %H:%M"
         lines = ["记录列表：",
                  "ID | 时间 | 发起群 | 发起者 | 方式 | 内容 | 原因 | 状态 | 撤销时间 | 撤销原因"]
@@ -618,107 +784,172 @@ class CommandHandler:
                           parts: List[str], at_list: List[str]) -> str:
         if level != 0:
             return "仅超级管理员可用"
-        if len(parts) < 2:
-            return "格式：/a <成员> [1/-1]"
 
-        tqq = self._resolve_target(at_list, parts[1])
+        match_cfgs = self._find_configs(group_id)
+        if not match_cfgs:
+            return None
+
+        # 解析配置名
+        cfg_name: Optional[str] = None
+        target_idx = 1
+        cfg = self._get_config(parts[1]) if len(parts) > 1 else None
+        if cfg is not None:
+            cfg_name = parts[1]
+            target_idx = 2
+        elif len(match_cfgs) >= 2:
+            return "本群属于多个配置，请指定配置名称：/a <配置名称> <QQ用户> [1/-1]"
+
+        if target_idx >= len(parts):
+            return "格式：/a [配置] <成员> [1/-1]"
+
+        tqq = self._resolve_target(at_list, parts[target_idx])
         if not tqq:
             return "未找到目标QQ"
         if tqq == sender_id:
             return "不能修改自己的权限"
 
         nl = 1
-        if len(parts) >= 3:
+        if len(parts) >= target_idx + 2:
             try:
-                nl = int(parts[2])
+                nl = int(parts[target_idx + 1])
             except ValueError:
                 return "权限只能是1或-1"
         if nl not in (1, -1):
             return "权限只能是1或-1"
 
-        self.permissions[tqq] = nl
+        # 确定要设置的配置
+        if cfg_name:
+            target_cfgs = [c for c in match_cfgs if c.name == cfg_name]
+            if not target_cfgs:
+                return f"配置 \"{cfg_name}\" 不存在或不包含本群"
+        else:
+            target_cfgs = match_cfgs
+
+        cfg_names = []
+        for c in target_cfgs:
+            c.permissions[tqq] = nl
+            cfg_names.append(c.name)
+
         self.save()
-        return f"已设置 {tqq} 为{'管理员' if nl == 1 else '普通成员'}"
+        role = "管理员" if nl == 1 else "普通成员"
+        return f"已设置 {tqq} 为{role} (配置: {', '.join(cfg_names)})"
 
-    # ==================== /group 管理组 ====================
+    # ==================== /config 配置管理 ====================
 
-    async def _group_cmd(self, level: int, sender_id: str, group_id: str,
-                         parts: List[str]) -> str:
+    async def _config_cmd(self, level: int, sender_id: str, group_id: str,
+                          parts: List[str]) -> str:
         if level != 0:
             return "仅超级管理员可用"
         if len(parts) < 2:
-            return "子命令：admin <名称> / set <名称> / remove / info"
+            return ("子命令：\n"
+                    "  config new <名称>              — 创建新配置\n"
+                    "  config rename <旧名> <新名>     — 重命名配置\n"
+                    "  config <名称> admin            — 设本群为通知群\n"
+                    "  config <名称> set              — 本群加入执行群\n"
+                    "  config <名称> remove           — 本群移出配置\n"
+                    "  config <名稱> group            — 查看配置信息")
 
-        sub = parts[1].lower()
-        if sub == "admin":
+        first = parts[1].lower()
+
+        # config new <名称>
+        if first == "new":
             if len(parts) < 3:
-                return "格式：/group admin <组名>"
+                return "格式：config new <名称>"
             name = parts[2]
-            if self._find_by_name(name):
-                return "管理组已存在"
-            if self._find_group(group_id):
-                return "本群已属于其他管理组"
-            mg = ManagementGroup(name=name, admin_group=group_id)
-            self.groups[name] = mg
+            if not name.strip():
+                return "配置名不能为空"
+            if name in self.configs:
+                return f"配置 \"{name}\" 已存在"
+            self.configs[name] = ConfigState(name=name, info=ConfigInfo())
             self.save()
-            return f"管理组 \"{name}\" 创建成功，本群为管理群"
+            return f"配置 \"{name}\" 创建成功"
+
+        # config rename <旧名> <新名>
+        if first == "rename":
+            if len(parts) < 4:
+                return "格式：config rename <旧名> <新名>"
+            old_name = parts[2]
+            new_name = parts[3]
+            if old_name not in self.configs:
+                return f"配置 \"{old_name}\" 不存在"
+            if new_name in self.configs:
+                return f"配置 \"{new_name}\" 已存在"
+
+            state = self.configs.pop(old_name)
+            state.name = new_name
+            self.configs[new_name] = state
+            self.dm.save_config(new_name, state)
+            self.dm.remove_config(old_name)
+            return f"配置 \"{old_name}\" 已重命名为 \"{new_name}\""
+
+        # config <名称> <子命令>
+        name = first
+        if name not in self.configs:
+            return f"配置 \"{name}\" 不存在，可用：config new <名称> 创建"
+
+        if len(parts) < 3:
+            return f"格式：config {name} admin / set / remove / group"
+
+        sub = parts[2].lower()
+        cfg = self.configs[name]
+
+        if sub == "admin":
+            cfg.info.notify_group = group_id
+            self.save()
+            return f"已将本群设为配置 \"{name}\" 的通知群"
 
         elif sub == "set":
-            if len(parts) < 3:
-                return "格式：/group set <组名>"
-            name = parts[2]
-            exist = self._find_by_name(name)
-            if not exist:
-                return "管理组不存在"
-            if exist.admin_group == group_id:
-                return "管理群不能作为执行群"
-            if self._find_group(group_id):
-                return "本群已属于其他管理组"
-            exist.execution_groups.add(group_id)
+            cfg.info.execution_groups.add(group_id)
             self.save()
-            return f"已将本群加入管理组 \"{name}\" 作为执行群"
+            return f"已将本群加入配置 \"{name}\" 的执行群"
 
         elif sub == "remove":
-            cur = self._find_group(group_id)
-            if not cur:
-                return "本群不属于任何管理组"
-            if cur.admin_group == group_id:
-                return "管理群无法移出，请用 /group admin 重建"
-            cur.execution_groups.discard(group_id)
+            removed = False
+            if cfg.info.notify_group == group_id:
+                cfg.info.notify_group = None
+                removed = True
+            if group_id in cfg.info.execution_groups:
+                cfg.info.execution_groups.discard(group_id)
+                removed = True
+            if not removed:
+                return f"本群不属于配置 \"{name}\""
             self.save()
-            return "已从管理组移出"
+            return f"已将本群从配置 \"{name}\" 移出"
 
-        elif sub == "info":
-            info = self._find_group(group_id)
-            if not info:
-                return "本群未加入管理组"
-            role = "管理群" if info.admin_group == group_id else "执行群"
-            el = ",".join(sorted(info.execution_groups)) if info.execution_groups else "无"
-            return (f"组名：{info.name}\n角色：{role}\n"
-                    f"管理群：{info.admin_group}\n执行群列表：{el}")
-        return "未知子命令"
+        elif sub == "group":
+            ng = cfg.info.notify_group or "未设置"
+            el = ", ".join(sorted(cfg.info.execution_groups)) if cfg.info.execution_groups else "无"
+            return (f"配置名：{name}\n"
+                    f"通知群：{ng}\n"
+                    f"执行群：{el}\n"
+                    f"记录数：{len(cfg.records)}")
+
+        return f"未知子命令：{sub}"
 
     # ==================== 记录/黑名单操作 ====================
 
-    def _add_record(self, sender: str, from_group: str, target: int,
+    def _add_record(self, cfg_name: str, sender: str, from_group: str, target: int,
                     method: str, content: str, reason: str, status: str) -> PunishRecord:
-        r = PunishRecord(id=self._next_rid, sender=int(sender),
+        cfg = self.configs[cfg_name]
+        r = PunishRecord(id=cfg.next_rid, sender=int(sender),
                          time=int(time.time()), from_group=from_group,
                          target=target, method=method, content=content,
                          reason=reason, status=status)
-        self._next_rid += 1
-        self.records.append(r)
-        self.records_by_id[r.id] = r
+        cfg.next_rid += 1
+        cfg.records.append(r)
+        cfg.records_by_id[r.id] = r
         return r
 
-    def _blacklist_add(self, qq: int, reason: str, group_name: str):
-        for b in self.blacklist:
+    def _blacklist_add(self, cfg_name: str, qq: int, reason: str, group_name: str):
+        cfg = self.configs[cfg_name]
+        for b in cfg.blacklist:
             if b.qq == qq and b.group_name == group_name:
                 return
-        self.blacklist.append(BlacklistItem(
+        cfg.blacklist.append(BlacklistItem(
             qq=qq, reason=reason, add_time=int(time.time()),
             group_name=group_name))
 
-    def _blacklist_remove(self, qq: int, group_name: str):
-        self.blacklist = [b for b in self.blacklist
-                          if not (b.qq == qq and b.group_name == group_name)]
+    def _blacklist_remove(self, cfg_name: str, qq: int, group_name: str):
+        cfg = self.configs[cfg_name]
+        cfg.blacklist = [b for b in cfg.blacklist
+                         if not (b.qq == qq and b.group_name == group_name)]
