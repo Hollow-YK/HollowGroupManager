@@ -9,7 +9,7 @@
 | **语言** | Java / BeanShell | Python 3.10+ |
 | **运行平台** | Android（QFun 插件） | 任意平台（Linux / Windows / macOS） |
 | **QQ 接口** | QFun Plugin API（直接调用） | OneBot v11 协议（HTTP / WebSocket） |
-| **代码组织** | 单文件（`main.java`，~1900 行） | 模块化（7 个 `.py` 文件） |
+| **代码组织** | 单文件（`main.java`，~2500 行） | 模块化（7 个 `.py` 文件） |
 | **图形渲染** | Android `Bitmap` / `Canvas` / `Paint` | Pillow（跨平台） |
 | **数据模型** | 手动 `toMap()` / `fromMap()` | Pydantic v2 自动序列化 |
 | **JSON 库** | `org.json` | Python `json` 标准库 |
@@ -69,25 +69,39 @@ async for event in ws_client:
 ### QFun 版 — 单文件架构
 
 ```
-main.java  (~1900 行)
-├── 全局变量和配置（行 1-46）
-├── 启动配置验证（行 47-358）
-├── 数据模型（行 360-467）
-│   ├── ManagementGroup
+main.java  (~2500 行)
+├── 数据模型（行 30-298）
+│   ├── ConfigInfo
+│   ├── CommandItem / CommandConfig
+│   ├── ConfigState
 │   ├── PunishRecord
 │   └── BlacklistItem
-├── 初始化与持久化（行 469-683）
-├── 辅助方法（行 690-760）
-├── 消息入口（行 762-821）
-├── 指令处理（行 823-1822）
-│   ├── cmdHelp()
-│   ├── cmdPunish()
+├── 全局变量与配置检查（行 300-480）
+├── JSON 转换辅助（行 440-470）
+├── 数据持久化（行 480-730）
+│   ├── 通用 JSON 读写（.tmp 原子写入 + .tmp 恢复）
+│   ├── 各配置加载/保存（loadConfigInfo / saveConfig 等）
+│   └── 全局 command.json 加载/保存
+├── 初始化（行 736-800）
+│   ├── init() — 扫描 data/ 子目录，加载所有配置
+│   └── buildCmdNameMap() — 构建命令名→内部名映射
+├── 辅助方法（行 810-910）
+│   ├── getPermissionLevel / findConfigsByGroup
+│   ├── resolvedCommands / resolveMinLevel
+│   └── parseDurationSeconds / extractQQ / resolveTargetQQ
+├── 消息入口（行 920-970） — onMsg() → cmdNameMap 动态路由
+├── 指令处理（行 970-2350）
+│   ├── cmdHelp() + buildOverviewLines + buildDetailLines
+│   ├── cmdPunish() + createPunishRecord + addToBlacklist
 │   ├── cmdRevoke()
 │   ├── cmdQuery()
 │   ├── cmdPermission()
-│   └── cmdGroup()
-├── 群事件处理（行 1825-1874）
-└── 生命周期（行 1877-1879）
+│   └── cmdConfig()
+├── 图片渲染（行 1320-1520、2080-2200）
+│   ├── generateHelpImage — 卡片分组 + AGPL 尾部
+│   └── generatePunishRecordTableImage — 表格渲染
+├── 群事件处理（行 2430-2490） — joinGroup()
+└── 生命周期（行 2500-2508） — unLoadPlugin()
 ```
 
 所有逻辑集中在单一 `main.java`，通过注释分隔逻辑区块。
@@ -333,6 +347,10 @@ dataDir=data
 
 两版在以下方面保持统一：
 
+- **指令集**：6 个指令（`/help`、`/p`、`/rp`、`/h`、`/a`、`/config`），语法和参数完全一致（`/config` 同时支持 `/group` 别名）
+- **权限模型**：多级（0/≥1/-1），各命令通过 `command.json` `min_level` 控制
+- **数据架构**：多配置，`data/<配置名>/punish/` 子目录
+- **命令配置**：`command.json` 全局 + 各配置覆盖，支持别名
 - **三步检查**：成员在群 → 状态检查 → 执行 → 执行后验证
 - **原子写入**：`.tmp` 文件 → 重命名覆盖目标
 - **许可协议**：AGPLv3
@@ -341,11 +359,14 @@ dataDir=data
 
 | 方面 | QFun 版 | OneBot11 版 |
 | --- | --- | --- |
-| **指令集** | `/group` 管理组 | `/config` 多配置管理，支持命令别名 |
-| **权限模型** | 三级（0/1/-1） | 多级（0/≥1/-1），各命令可设 `min_level` |
-| **数据架构** | 单管理组，扁平 `data/` | 多配置，`data/<配置>/punish/` 子目录 |
-| **数据模型** | `ManagementGroup`(name+admin+execs) | `ConfigInfo`(notify+execs)，字段不同 |
-| **命令配置** | 无 | `command.json` 全局+各配置覆盖 |
+| **语言 / 平台** | Java / BeanShell（Android） | Python 3.10+（跨平台） |
+| **QQ 接口** | QFun Plugin API（进程内） | OneBot v11 协议（HTTP/WS） |
+| **代码组织** | 单文件（`main.java`，~2500 行） | 模块化（7 个 `.py` 文件） |
+| **图片渲染** | Android `Canvas` / `Paint` | Pillow（跨平台） |
+| **数据模型** | 手动 `toMap()` / `fromMap()` | Pydantic v2 自动序列化 |
+| **配置格式** | `config.properties` | `config.json`（JSON） |
+| **渲染可选性** | 始终启用 | 可通过 `render.enabled: false` 降级为纯文本 |
+| **并发模型** | `Collections.synchronizedList` | `asyncio` 协程 |
 
 ## 选择指南
 
