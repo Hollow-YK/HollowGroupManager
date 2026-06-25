@@ -78,6 +78,7 @@ jobs:
           fi
 
           git-cliff \
+            --config .github/cliff.toml \
             --github-repo "${{ github.repository }}" \
             --github-token "${{ secrets.GITHUB_TOKEN }}" \
             --log-option "--first-parent" \
@@ -91,9 +92,11 @@ jobs:
       - name: Compose final release body
         run: |
           {
-            # 更新日志 (history.txt) + 分类 PR changelog (git-cliff)
+            HAS_UPDATE_LOG=false
+
             # PRIMARY: history.txt 提取的更新日志
             if [ -s /tmp/update_log.md ]; then
+              HAS_UPDATE_LOG=true
               echo "## 更新日志"
               echo ""
               cat /tmp/update_log.md
@@ -102,7 +105,13 @@ jobs:
               echo ""
             fi
 
-            # git-cliff 生成的分类 PR changelog
+            # git-cliff / fallback — 有 update_log 时折叠到 <details> 里
+            if $HAS_UPDATE_LOG; then
+              echo '<details>'
+              echo '<summary>📋 提交记录</summary>'
+              echo ""
+            fi
+
             if [ -s /tmp/changelog.md ]; then
               cat /tmp/changelog.md
             else
@@ -115,6 +124,11 @@ jobs:
               else
                 git log --format="- %s" --no-merges
               fi
+            fi
+
+            if $HAS_UPDATE_LOG; then
+              echo ""
+              echo '</details>'
             fi
           } > /tmp/release_body.md
 
