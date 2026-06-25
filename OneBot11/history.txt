@@ -1,6 +1,16 @@
 多群联动管理Bot — 版本历史
 ============================
 
+V1.0.5 (2026-06-25)
+--------------------
+▸ 多配置架构：单管理组 → 多配置独立存储（data/<配置名>/punish/）
+▸ 命令配置系统：data/command.json 全局 + 各配置 command.json 覆盖，支持别名
+▸ 权限模型扩展：三级（0/1/-1）→ 多级（0/≥1/-1），各命令支持 min_level
+▸ 指令变更：/group → /config（new/rename/notify/set/remove/group 子命令）
+▸ help 重构：卡片化分组（圆角背景），添加 AGPL v3 声明
+▸ 新增旧版数据迁移工具 tools/migrate.py
+▸ 代码分层：将指令处理拆分为 render.py / commands.py
+
 V1.0.4 (2026-06-24)
 --------------------
 ▸ 初始发布
