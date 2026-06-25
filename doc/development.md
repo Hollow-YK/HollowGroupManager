@@ -7,7 +7,7 @@
 ```text
 HollowGroupManager/
 ├── QFun/                          # QFun 插件版（Java/BeanShell）
-│   ├── main.java                  # 单文件插件脚本（~1900 行）
+│   ├── main.java                  # 单文件插件脚本（~2500 行）
 │   ├── config.properties          # 唤醒词、超管、数据目录
 │   ├── info.prop                  # 插件元信息（id/名称/版本/作者）
 │   ├── desc.txt                   # 插件描述（QFun 列表展示）
@@ -130,7 +130,7 @@ QQ消息 → 框架/协议层 → 消息处理器
 
 ### 命名规范
 
-- 类名：`PascalCase`（`ManagementGroup`、`PunishRecord`）
+- 类名：`PascalCase`（`ConfigState`、`PunishRecord`）
 - 方法名/变量：`camelCase`（`saveAll`、`findGroupByGroupId`）
 - 常量：`camelCase`（`wakeWords`、`dataDirPath`）
 
@@ -198,20 +198,22 @@ log("info.log", "message");
 
 ### 添加新指令（QFun）
 
-1. 在 `onMsg()` 的 `switch` 分发中添加 `case "新指令":`
-2. 实现 `cmdXxx()` 方法
-3. 在 `cmdHelp()` 中加入条目
+1. 在 `CommandConfig.defaults()` 中添加命令配置（internal name, names, min_level）
+2. 在 `onMsg()` 的 switch 中添加 `case "新内部名":` 分支
+3. 实现 `cmdXxx()` 方法
+4. 在 `initHelpMaps()` 中的 `CMD_DESC` / `CMD_FORMAT` / `CMD_EXAMPLES` / `CMD_DETAIL` 添加帮助条目
 
 ### 添加新数据持久化（QFun）
 
-1. 定义模型类（遵循 `toMap()`/`fromMap()` 模式）
-2. 在 `init()` 中添加加载：`xxx = Collections.synchronizedList(loadList(..., Xxx::fromMap))`
-3. 在 `saveAll()` 中添加保存：`saveList(..., xxx, Xxx::toMap)`
+1. 定义数据模型类（遵循 `toMap()`/`fromMap()` 模式）
+2. 添加 `loadConfigXxx(name)` / `saveConfigXxx(name, data)` 方法
+3. 在 `saveConfig(name)` 中调用新的保存方法
+4. 在 `init()` 的配置加载循环中加载新数据
 
 ### 添加新配置项（QFun）
 
 1. 在 `config.properties` 中添加键值
-2. 在 `init()` 中 `props.getProperty("key", "默认值")` 读取
+2. 在 `checkAndRepairConfig()` 中添加默认值处理
 3. 更新 README
 
 ---
@@ -260,12 +262,11 @@ async def main():
 ### 数据模型（Pydantic）
 
 ```python
-class ManagementGroup(BaseModel):
-    name: str
-    admin_group: int = Field(alias='adminGroup')
-    execution_groups: list[int] = Field(default_factory=list, alias='executionGroups')
+class ConfigInfo(BaseModel):
+    notify_group: Optional[str] = Field(default=None, alias='notifyGroup')
+    execution_groups: set[str] = Field(default_factory=set, alias='executionGroups')
 
-    model_config = ConfigDict(populate_by_name=True)  # 支持驼峰/下划线互转
+    model_config = {"populate_by_name": True}  # 支持驼峰/下划线互转
 
 class PunishRecord(BaseModel):
     id: int
