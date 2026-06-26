@@ -110,7 +110,7 @@ class HelpModule:
             lines = self._build_detail_lines(w, detail_internal, ext_cmd, configs)
             title = f"帮助 — {ext_cmd}"
         else:
-            lines = self._build_overview_lines(w, configs, sender_id)
+            lines = self._build_overview_lines(w, configs, sender_id, level)
             title = "HollowGroupManager 帮助"
 
         png = self.d._render_png(lambda: render_help(title, subtitle, lines))
@@ -149,7 +149,7 @@ class HelpModule:
     # ========== 概览 ==========
 
     def _build_overview_lines(self, w: str, configs: list,
-                               sender_id: str) -> list[str]:
+                               sender_id: str, level: int) -> list[str]:
         """概览：全局卡片 + 有自定义的配置各一卡片"""
         lines = [
             "= 可用指令",
@@ -159,8 +159,10 @@ class HelpModule:
         if not configs:
             lines.append("@")
             lines.append("= ── 全局（当前群未关联配置）──")
+            # 无配置群：help/config 始终显示（引导设置），其余按实际权限
             lines += self._render_filtered_cmds(self.d.global_commands,
-                {"help", "punish_do", "punish_revoke", "punish_history", "admin", "config"}, -1, w)
+                {"help", "punish_do", "punish_revoke", "punish_history", "admin", "config"},
+                level, w, force_visible={"help", "config"})
             lines.append("@@")
             return lines
 
@@ -223,15 +225,21 @@ class HelpModule:
         return lines
 
     def _render_filtered_cmds(self, cc, include: set[str],
-                               user_level: int, w: str) -> list[str]:
-        """渲染指定命令列表（仅 included 中的），格式 + 描述 + 示例"""
+                               user_level: int, w: str,
+                               force_visible: set = None) -> list[str]:
+        """渲染指定命令列表（仅 included 中的），格式 + 描述 + 示例。
+        force_visible 中的命令忽略可见性检查，始终渲染。"""
+        if force_visible is None:
+            force_visible = set()
         lines = []
         order = ["help", "punish_do", "punish_revoke", "punish_history", "admin", "config"]
         for internal in order:
             if internal not in include:
                 continue
             item = cc.commands.get(internal)
-            if item is None or not self._cmd_visible(item, user_level):
+            if item is None:
+                continue
+            if not self._cmd_visible(item, user_level) and internal not in force_visible:
                 continue
             primary = self._primary_cmd_name(item)
             aliases = item.names[1:] if len(item.names) > 1 else []
