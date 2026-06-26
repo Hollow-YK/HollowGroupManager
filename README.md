@@ -84,8 +84,7 @@ HollowGroupManager/
 ├── OneBot11/                # OneBot v11 版（Python）
 ├── doc/                     # 项目文档
 │   ├── comparison.md        # 两版详细对比
-│   ├── development.md       # 开发文档
-│   └── qfun-pitfalls.md     # QFun 开发注意事项
+│   └── development/          # 开发文档（含 QFun/OneBot11 子目录）
 └── .github/workflows/       # CI 发布流程
 ```
 
@@ -96,9 +95,7 @@ HollowGroupManager/
 | [QFun/README.md](QFun/README.md) | QFun 版安装、配置、使用 |
 | [OneBot11/README.md](OneBot11/README.md) | OneBot11 版安装、配置、使用 |
 | [doc/comparison.md](doc/comparison.md) | 两版架构、接口、部署详细对比 |
-| [doc/development.md](doc/development.md) | 开发指南、架构设计、添加功能 |
-| [doc/qfun-pitfalls.md](doc/qfun-pitfalls.md) | QFun 版开发注意问题 |
-| [QFun/AGENTS.md](QFun/AGENTS.md) | QFun 版专属开发提示（BeanShell 注意事项等） |
+| [doc/development/](doc/development/) | 开发指南、架构设计、添加功能（含 QFun/OneBot11 子目录） |
 
 ## 许可证
 

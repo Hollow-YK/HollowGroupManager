@@ -5,7 +5,7 @@ import logging
 from typing import Optional
 
 from bot.api import OneBotAPI
-from core.commands import CommandHandler
+from core.dispatcher import CommandDispatcher
 
 logger = logging.getLogger("Hollow.Handler")
 
@@ -13,7 +13,7 @@ logger = logging.getLogger("Hollow.Handler")
 class EventHandler:
     """OneBot v11 事件 → 业务逻辑的桥梁"""
 
-    def __init__(self, api: OneBotAPI, cmd: CommandHandler):
+    def __init__(self, api: OneBotAPI, cmd: CommandDispatcher):
         self.api = api
         self.cmd = cmd
 
