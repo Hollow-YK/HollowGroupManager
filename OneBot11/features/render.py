@@ -7,7 +7,7 @@ from typing import Optional, List
 
 from PIL import Image, ImageDraw, ImageFont
 
-from .models import PunishRecord
+from core.models import PunishRecord
 
 # ---- 中文字体查找 ----
 

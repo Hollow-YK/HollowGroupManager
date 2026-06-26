@@ -155,6 +155,7 @@ jobs:
           cp OneBot11/LICENSE           dist/HollowGroupManager/
           cp -r OneBot11/bot            dist/HollowGroupManager/
           cp -r OneBot11/core           dist/HollowGroupManager/
+          cp -r OneBot11/features       dist/HollowGroupManager/
           cp -r OneBot11/tools          dist/HollowGroupManager/
           find dist/HollowGroupManager -type d -name __pycache__ -exec rm -rf {} + 2>/dev/null || true
           cd dist

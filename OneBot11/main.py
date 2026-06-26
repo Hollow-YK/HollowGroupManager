@@ -22,7 +22,13 @@ from bot.api import OneBotAPI
 from bot.client import OneBotWS
 from bot.handler import EventHandler
 from core.data_manager import DataManager
-from core.commands import CommandHandler
+from core.dispatcher import CommandDispatcher
+from features.basic.help import HelpModule
+from features.basic.config_cmd import ConfigModule
+from features.basic.admin import AdminModule
+from features.punish.punish import PunishModule
+from features.punish.rp import RpModule
+from features.punish.history import HistoryModule
 
 logger = logging.getLogger("Hollow")
 
@@ -136,19 +142,36 @@ async def main():
     # ---- 数据 ----
     dm = DataManager(pl.get("data_dir", "data"))
 
-    # ---- 指令 ----
-    cmd = CommandHandler(
+    # ---- 指令分发 ----
+    dispatcher = CommandDispatcher(
         api=api, dm=dm,
         wake_words=pl.get("wake_words", ["/", "!", "。"]),
         super_admins={str(a) for a in pl.get("super_admins", [])},
         render_enabled=render_cfg.get("enabled", True),
     )
-    cmd.load()
-    if not cmd.super_admins:
+    dispatcher.load()
+    if not dispatcher.super_admins:
         logger.warning("⚠ 未配置 super_admins，请在 config.json 中设置！")
 
+    # ---- 功能模块注册 ----
+    punish_mod = PunishModule(dispatcher)
+    dispatcher.register_command("help",
+        HelpModule(dispatcher).handle, global_check=True)
+    dispatcher.register_command("config",
+        ConfigModule(dispatcher).handle, global_check=True)
+    dispatcher.register_command("admin",
+        AdminModule(dispatcher).handle)
+    dispatcher.register_command("punish_do",
+        punish_mod.handle)
+    dispatcher.register_command("punish_revoke",
+        RpModule(dispatcher).handle)
+    dispatcher.register_command("punish_history",
+        HistoryModule(dispatcher).handle)
+    dispatcher.register_event("notice.group_increase",
+        punish_mod.on_member_join)
+
     # ---- 事件 ----
-    handler = EventHandler(api, cmd)
+    handler = EventHandler(api, dispatcher)
     ws.on_event("message", handler.on_message)
     ws.on_event("notice", handler.on_notice)
     ws.on_event("request", handler.on_request)
@@ -168,7 +191,7 @@ async def main():
         logger.info("收到中断信号")
     finally:
         await ws.stop()
-        cmd.save()
+        dispatcher.save()
         logger.info("数据已保存，退出。")
 
 
