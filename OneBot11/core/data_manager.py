@@ -207,15 +207,42 @@ class DataManager:
     # ==================== 全局 command.json（data/command.json） ====================
 
     def load_global_commands(self) -> CommandConfig:
-        """加载全局命令配置"""
+        """加载全局命令配置，自动补上 defaults 中新增的命令/子命令"""
         p = self._dir / "command.json"
-        data = self._read_file(p)
-        if isinstance(data, dict):
-            try:
-                return CommandConfig.model_validate(data)
-            except Exception:
-                logger.warning("全局 command.json 解析失败")
-        return CommandConfig.defaults()
+        loaded = None
+        if p.exists():
+            data = self._read_file(p)
+            if isinstance(data, dict):
+                try:
+                    loaded = CommandConfig.model_validate(data)
+                except Exception:
+                    logger.warning("全局 command.json 解析失败")
+        if loaded is None:
+            loaded = CommandConfig(commands={})
+
+        defaults = CommandConfig.defaults()
+        changed = False
+        for cmd_name, default_item in defaults.commands.items():
+            existing = loaded.commands.get(cmd_name)
+            if existing is None:
+                # 新命令，直接加入
+                loaded.commands[cmd_name] = default_item
+                changed = True
+                logger.info(f"自动添加命令: {cmd_name}")
+            elif default_item.sub:
+                # 已有的命令，检查子命令
+                if existing.sub is None:
+                    existing.sub = {}
+                for sub_name, default_sub in default_item.sub.items():
+                    if sub_name not in existing.sub:
+                        existing.sub[sub_name] = default_sub
+                        changed = True
+                        logger.info(f"自动添加子命令: {cmd_name}.{sub_name}")
+
+        if changed:
+            self.save_global_commands(loaded)
+
+        return loaded
 
     def save_global_commands(self, commands: CommandConfig):
         """保存全局命令配置"""
