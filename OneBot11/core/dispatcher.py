@@ -334,10 +334,11 @@ class CommandDispatcher:
             return False  # 未找到或全部禁用
 
         min_lv = self._resolve_min_level(item)
-        if user_level == 0:
+        # 超管全部通过；min_lv=-1 所有人可用
+        if user_level == 0 or min_lv == -1:
             return True
         if user_level == -1:
-            return min_lv == -1
+            return False  # 普通成员，非 -1 命令不可用
         return user_level <= min_lv
 
     def _check_sub_command(self, internal: str, sub_name: str,
@@ -353,10 +354,10 @@ class CommandDispatcher:
                 sub = self._get_sub_item(item, sub_name)
                 if sub and sub.enabled:
                     min_lv = self._resolve_min_level(sub, item)
-                    if user_level == 0:
+                    if user_level == 0 or min_lv == -1:
                         return True
                     if user_level == -1:
-                        return min_lv == -1
+                        return False
                     return user_level <= min_lv
 
         # 全局回退
@@ -365,10 +366,10 @@ class CommandDispatcher:
             sub = self._get_sub_item(item, sub_name)
             if sub and sub.enabled:
                 min_lv = self._resolve_min_level(sub, item)
-                if user_level == 0:
+                if user_level == 0 or min_lv == -1:
                     return True
                 if user_level == -1:
-                    return min_lv == -1
+                    return False
                 return user_level <= min_lv
 
         return False

@@ -1,8 +1,8 @@
 """
 /config 指令 — 多配置管理。
 
-子命令：new, rename, list, notify, set, remove, group
-仅超级管理员可用，注册为 global_check=True。
+子命令：list, new, rename, notify, set, remove, group
+权限由 command.json 的 min_level 控制（默认 0=超管），注册为 global_check=True。
 """
 from typing import Optional, TYPE_CHECKING
 
@@ -21,9 +21,6 @@ class ConfigModule:
 
     async def handle(self, level: int, sender_id: str, group_id: str,
                      parts: list, at_list: list, sender_card: str = "") -> Optional[str]:
-        if level != 0:
-            return None  # 仅超管可用，不响应
-
         all_cfgs = list(self.d.configs.values())
         if len(parts) < 2:
             return ("子命令：\n"
@@ -36,6 +33,37 @@ class ConfigModule:
                     "  config <名称> group            — 查看配置信息")
 
         first = parts[1].lower()
+
+        # config list
+        if first == "list":
+            if not self.d._check_sub_command("config", "list", all_cfgs, level):
+                return None
+
+            if all_cfgs:
+                data = [
+                    (
+                        cfg.name,
+                        cfg.info.notify_group or "未设置",
+                        ", ".join(sorted(cfg.info.execution_groups)) if cfg.info.execution_groups else "无",
+                        len(cfg.records),
+                    )
+                    for cfg in all_cfgs
+                ]
+            else:
+                data = []
+
+            png = self.d._render_png(lambda: render_config_list(data))
+            if png:
+                await self.d.send_image(int(group_id), png)
+                return ""
+
+            # 纯文本回退
+            if not data:
+                return "暂无配置"
+            lines = ["配置名 | 通知群 | 执行群 | 记录数"]
+            for name, notify, exec_groups, count in data:
+                lines.append(f"{name} | {notify} | {exec_groups} | {count}")
+            return "\n".join(lines)
 
         # config new <名称>
         if first == "new":
@@ -74,44 +102,13 @@ class ConfigModule:
             self.d._build_cmd_map()
             return f"配置 \"{old_name}\" 已重命名为 \"{new_name}\""
 
-        # config list
-        if first == "list":
-            if not self.d._check_sub_command("config", "list", all_cfgs, level):
-                return None
-
-            if all_cfgs:
-                data = [
-                    (
-                        cfg.name,
-                        cfg.info.notify_group or "未设置",
-                        ", ".join(sorted(cfg.info.execution_groups)) if cfg.info.execution_groups else "无",
-                        len(cfg.records),
-                    )
-                    for cfg in all_cfgs
-                ]
-            else:
-                data = []
-
-            png = self.d._render_png(lambda: render_config_list(data))
-            if png:
-                await self.d.send_image(int(group_id), png)
-                return ""
-
-            # 纯文本回退
-            if not data:
-                return "暂无配置"
-            lines = ["配置名 | 通知群 | 执行群 | 记录数"]
-            for name, notify, exec_groups, count in data:
-                lines.append(f"{name} | {notify} | {exec_groups} | {count}")
-            return "\n".join(lines)
-
         # config <名称> <子命令>
         name = first
         if name not in self.d.configs:
             return f"配置 \"{name}\" 不存在，可用：config new <名称> 创建"
 
         if len(parts) < 3:
-            return f"格式：config {name} notify / set / remove / group\nconfig new <名称> / rename <旧名> <新名> / list"
+            return f"格式：config {name} notify / set / remove / group\nconfig list / new <名称> / rename <旧名> <新名>"
 
         sub = parts[2].lower()
         if not self.d._check_sub_command("config", sub, all_cfgs, level):
