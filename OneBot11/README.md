@@ -4,7 +4,7 @@
 
 > 本项目另提供 [QFun 版](../QFun/README.md)，基于 QFun Plugin 框架直接在 Android QQ 内运行。两版功能等价、数据格式兼容。
 >
-> 📖 [详细对比](../doc/comparison.md) · [开发文档](../doc/development.md) · [项目总览](../README.md)
+> 📖 [详细对比](../doc/comparison.md) · [开发文档](../doc/development/OneBot11/) · [项目总览](../README.md)
 
 ## 快速开始
 
@@ -132,21 +132,30 @@ python main.py
 
 ```text
 OneBot11/
-├── main.py              # 入口（asyncio）
+├── main.py              # 入口（asyncio）+ 模块装配注册
 ├── config.json          # 配置文件
 ├── requirements.txt     # Python 依赖
 ├── README.md            # 本文档
 ├── history.txt          # 版本历史
 ├── LICENSE              # AGPLv3
-├── bot/                 # 通信层
-│   ├── api.py           # HTTP/WS API 封装
-│   ├── client.py        # WebSocket 客户端
-│   └── handler.py       # 事件分发
-├── core/                # 业务逻辑
-│   ├── models.py        # Pydantic 数据模型
-│   ├── data_manager.py  # JSON 持久化（多配置 + .tmp 原子写）
-│   ├── commands.py      # 指令实现
-│   └── render.py        # 图片生成（Pillow）
+├── bot/                 # [框架] 通信层 — 协议实现，功能模块不可见
+│   ├── api.py           #   HTTP/WS API 封装
+│   ├── client.py        #   WebSocket 客户端/服务端
+│   └── handler.py       #   原始事件 → dispatcher 桥接
+├── core/                # [框架] 基础设施 — 功能模块的唯一依赖入口
+│   ├── models.py        #   Pydantic 数据模型
+│   ├── data_manager.py  #   JSON 持久化（多配置 + .tmp 原子写）
+│   └── dispatcher.py    #   指令/事件注册 + 统一 Bot 能力 API + 分发核心
+├── features/            # [功能] 所有业务功能
+│   ├── render.py        #   图片渲染（Pillow）
+│   ├── basic/           #   [基础功能]
+│   │   ├── help.py      #   /help 指令
+│   │   ├── config_cmd.py#   /config 多配置管理
+│   │   └── admin.py     #   /a 权限管理
+│   └── punish/          #   [punish功能]
+│       ├── punish.py    #   /p 处罚 + 黑名单入群监听
+│       ├── rp.py        #   /rp 撤销处罚
+│       └── history.py   #   /h 查询记录
 ├── tools/               # 独立工具
 │   └── migrate.py       # 旧版数据迁移脚本
 ├── data/                # 运行时数据
@@ -160,6 +169,20 @@ OneBot11/
 │           └── blacklist.json   # 黑名单
 └── logs/                # 日志文件（时间命名）
 ```
+
+### 架构概览
+
+```
+功能模块（features/）    ← 只依赖 dispatcher，不直接引用 bot/
+        │
+        ▼
+core/dispatcher.py      ← 注册接口 + Bot 能力 API + 权限/配置/数据服务
+        │
+        ▼
+bot/ (api.py, client.py) ← OneBot v11 协议封装（对功能模块透明）
+```
+
+功能模块通过 `dispatcher.register_command()` / `register_event()` 注册，无需修改框架代码。Dispatcher 提供统一的 `send_message()` / `kick()` / `ban()` 等语义化 API 封装底层协议细节。
 
 ## 配置系统
 
@@ -180,7 +203,7 @@ OneBot11/
 | 文档 | 内容 |
 | --- | --- |
 | [doc/comparison.md](../doc/comparison.md) | QFun vs OneBot11 详细对比（通信模式架构图等） |
-| [doc/development.md](../doc/development.md) | 开发指南（架构、添加指令、数据持久化等） |
+| [doc/development/OneBot11/](../doc/development/OneBot11/) | 开发指南（框架、功能、数据开发） |
 | [QFun/AGENTS.md](../QFun/AGENTS.md) | QFun 版开发提示（BeanShell 注意事项） |
 | [根目录 README](../README.md) | 项目总览 |
 

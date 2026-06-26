@@ -4,7 +4,7 @@
 
 > 本项目另提供 [OneBot11 版](../OneBot11/README.md)，基于 OneBot v11 协议，纯 Python 实现，可在服务器上运行。两版功能等价、数据格式兼容。
 >
-> 📖 [详细对比](../doc/comparison.md) · [开发文档](../doc/development.md) · [项目总览](../README.md)
+> 📖 [详细对比](../doc/comparison.md) · [开发文档](../doc/development/QFun/) · [项目总览](../README.md)
 
 ## 快速开始
 
@@ -117,7 +117,7 @@ dataDir=data
 | --- | --- |
 | [AGENTS.md](AGENTS.md) | QFun 专属开发提示（BeanShell 类型陷阱、线程安全等） |
 | [doc/comparison.md](../doc/comparison.md) | QFun vs OneBot11 详细对比 |
-| [doc/development.md](../doc/development.md) | 开发指南（添加指令、数据持久化等） |
+| [doc/development/QFun/](../doc/development/QFun/) | 开发指南（添加指令、数据持久化等） |
 | [根目录 README](../README.md) | 项目总览 |
 
 ## 许可证
