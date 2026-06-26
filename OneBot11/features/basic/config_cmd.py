@@ -1,12 +1,13 @@
 """
 /config 指令 — 多配置管理。
 
-子命令：new, rename, notify, set, remove, group
+子命令：new, rename, list, notify, set, remove, group
 仅超级管理员可用，注册为 global_check=True。
 """
 from typing import Optional, TYPE_CHECKING
 
 from core.models import ConfigInfo, ConfigState
+from features.render import render_config_list
 
 if TYPE_CHECKING:
     from core.dispatcher import CommandDispatcher
@@ -26,6 +27,7 @@ class ConfigModule:
         all_cfgs = list(self.d.configs.values())
         if len(parts) < 2:
             return ("子命令：\n"
+                    "  config list                   — 列出已有配置\n"
                     "  config new <名称>              — 创建新配置\n"
                     "  config rename <旧名> <新名>     — 重命名配置\n"
                     "  config <名称> notify           — 设本群为通知群\n"
@@ -72,13 +74,44 @@ class ConfigModule:
             self.d._build_cmd_map()
             return f"配置 \"{old_name}\" 已重命名为 \"{new_name}\""
 
+        # config list
+        if first == "list":
+            if not self.d._check_sub_command("config", "list", all_cfgs, level):
+                return None
+
+            if all_cfgs:
+                data = [
+                    (
+                        cfg.name,
+                        cfg.info.notify_group or "未设置",
+                        ", ".join(sorted(cfg.info.execution_groups)) if cfg.info.execution_groups else "无",
+                        len(cfg.records),
+                    )
+                    for cfg in all_cfgs
+                ]
+            else:
+                data = []
+
+            png = self.d._render_png(lambda: render_config_list(data))
+            if png:
+                await self.d.send_image(int(group_id), png)
+                return ""
+
+            # 纯文本回退
+            if not data:
+                return "暂无配置"
+            lines = ["配置名 | 通知群 | 执行群 | 记录数"]
+            for name, notify, exec_groups, count in data:
+                lines.append(f"{name} | {notify} | {exec_groups} | {count}")
+            return "\n".join(lines)
+
         # config <名称> <子命令>
         name = first
         if name not in self.d.configs:
             return f"配置 \"{name}\" 不存在，可用：config new <名称> 创建"
 
         if len(parts) < 3:
-            return f"格式：config {name} notify / set / remove / group"
+            return f"格式：config {name} notify / set / remove / group\nconfig new <名称> / rename <旧名> <新名> / list"
 
         sub = parts[2].lower()
         if not self.d._check_sub_command("config", sub, all_cfgs, level):
