@@ -115,7 +115,8 @@ class OneBotAPI:
 
     # ==================== 消息发送 ====================
 
-    async def send_group_msg(self, group_id: int, message: str) -> Optional[int]:
+    async def send_group_msg(self, group_id: int, message) -> Optional[int]:
+        """发送群聊消息。message 为消息段数组（list[dict]），OneBot v11 数组格式。"""
         data = await self._call("send_group_msg", {
             "group_id": group_id, "message": message,
         })

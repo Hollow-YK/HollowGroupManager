@@ -81,19 +81,25 @@ class CommandDispatcher:
     # Bot 能力 API — 消息发送
     # ════════════════════════════════════════════════════════════
 
-    async def send_message(self, group_id: int, text: str) -> bool:
-        """发送群聊文本消息。空字符串直接返回 True。"""
-        if not text:
+    async def send_message(self, group_id: int,
+                           message: str | list[dict]) -> bool:
+        """发送群聊消息。str 自动转 text 段，list 直接作为消息段数组发送。"""
+        if isinstance(message, str):
+            if not message:
+                return True
+            message = [{"type": "text", "data": {"text": message}}]
+        if not message:
             return True
-        return await self._api.send_group_msg(group_id, text)
+        return await self._api.send_group_msg(group_id, message)
 
     async def send_image(self, group_id: int, png_bytes: bytes) -> bool:
-        """发送图片消息（自动 base64 编码 + CQ 码封装）。"""
+        """发送图片消息（base64 编码，OneBot v11 数组格式 image 段）。"""
         import base64
-        return await self.send_message(
-            group_id,
-            f"[CQ:image,file=base64://{base64.b64encode(png_bytes).decode()}]"
-        )
+        return await self.send_message(group_id, [
+            {"type": "image", "data": {
+                "file": f"base64://{base64.b64encode(png_bytes).decode()}"
+            }}
+        ])
 
     def _render_png(self, maker) -> Optional[bytes]:
         """调用渲染函数生成 PNG，自动处理 Pillow 缺失/异常并禁用渲染。"""
