@@ -272,6 +272,72 @@ def render_record_table(records: List[PunishRecord]) -> bytes:
     return buf.getvalue()
 
 
+# ---- 配置列表表格 ----
+
+
+def render_config_list(configs: list[tuple[str, str, str, int]]) -> bytes:
+    """渲染配置列表表格图片，返回 PNG 字节。
+    configs: [(名称, 通知群, 执行群列表, 记录数), ...]"""
+    font_title = _get_font(28, bold=True)
+    font_header = _get_font(18, bold=True)
+    font_cell = _get_font(17, bold=False)
+
+    _HEADERS = ["配置名", "通知群", "执行群", "记录数"]
+    _COL_WIDTHS = [120, 160, 200, 90]
+    ROW_H = 42
+    HEADER_H = 46
+
+    # 计算列 X 位置
+    col_x = []
+    x = 16
+    for w in _COL_WIDTHS:
+        col_x.append(x)
+        x += w + 12
+    width = x + 16
+    header_y = 68
+    height = header_y + HEADER_H + len(configs) * ROW_H + 30
+
+    img = Image.new("RGB", (width, height), "white")
+    draw = ImageDraw.Draw(img)
+
+    # 标题
+    draw.text((20, 20), f"配置列表 ({len(configs)}个)",
+              fill="#1A237E", font=font_title)
+
+    # 表头背景
+    draw.rounded_rectangle(
+        (12, header_y - 4, width - 12, header_y + HEADER_H - 10),
+        radius=10, fill="#3F51B5",
+    )
+
+    # 表头文字
+    for i, h in enumerate(_HEADERS):
+        draw.text((col_x[i], header_y + 10), h, fill="white", font=font_header)
+
+    # 数据行
+    for ri, (name, notify, exec_groups, count) in enumerate(configs):
+        row_y = header_y + HEADER_H + ri * ROW_H
+
+        # 交替背景
+        bg = "#F5F7FF" if ri % 2 == 0 else "white"
+        draw.rectangle((12, row_y, width - 12, row_y + ROW_H), fill=bg)
+        draw.line((12, row_y + ROW_H, width - 12, row_y + ROW_H), fill="#E0E0E0")
+
+        vals = [
+            _truncate(name, font_cell, _COL_WIDTHS[0]),
+            _truncate(notify, font_cell, _COL_WIDTHS[1]),
+            _truncate(exec_groups, font_cell, _COL_WIDTHS[2]),
+            str(count),
+        ]
+
+        for j, v in enumerate(vals):
+            draw.text((col_x[j], row_y + 10), v, fill="#212121", font=font_cell)
+
+    buf = BytesIO()
+    img.save(buf, format="PNG")
+    return buf.getvalue()
+
+
 def _truncate(text: str, font: ImageFont.FreeTypeFont, max_w: int) -> str:
     w = _get_text_width(text, font)
     if w <= max_w:

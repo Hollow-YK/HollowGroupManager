@@ -51,7 +51,8 @@ class CommandConfig(BaseModel):
                 "notify": CommandItem(enabled=True),
                 "set":    CommandItem(enabled=True),
                 "remove": CommandItem(enabled=True),
-                "group":  CommandItem(enabled=True, min_level=-1),
+                "group":  CommandItem(enabled=True),
+                "list":   CommandItem(enabled=True),
             }),
         })
 

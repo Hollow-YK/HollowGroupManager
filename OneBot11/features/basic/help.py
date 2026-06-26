@@ -16,36 +16,47 @@ class HelpModule:
 
     _CMD_DESC = {
         "help": "查看帮助",
+        "config": "配置管理",
+        "admin": "权限管理",
         "punish_do": "处罚成员",
         "punish_revoke": "撤销处罚",
         "punish_history": "查询处罚记录",
-        "admin": "权限管理",
-        "config": "配置管理",
     }
 
     # 概览用：格式行（{cmd} 替换为配置中的第一个命令名）
     _CMD_FORMAT = {
         "help":    "{w}{cmd} [命令]",
+        "config":  "{w}{cmd} <子命令>",
+        "admin":   "{w}{cmd} [配置] <目标> [等级]",
         "punish_do":  "{w}{cmd} <目标> [配置] <方式> [内容] <原因>",
         "punish_revoke":  "{w}{cmd} [配置] <记录ID> [撤销原因]",
         "punish_history": "{w}{cmd} [配置] [目标] [-i]",
-        "admin":   "{w}{cmd} [配置] <目标> [等级]",
-        "config":  "{w}{cmd} <子命令>",
     }
 
     # 概览用：示例（{cmd} 替换为配置中的第一个命令名）
     _CMD_EXAMPLES = {
         "help":    ["{w}{cmd} <命令>"],
+        "config":  ["{w}{cmd} new 反馈组", "{w}{cmd} 反馈组 set"],
+        "admin":   ["{w}{cmd} @某人 1"],
         "punish_do":  ["{w}{cmd} @某人 mute 1d2h 广告刷屏"],
         "punish_revoke":  ["{w}{cmd} 5 误判"],
         "punish_history": ["{w}{cmd} @某人 -i"],
-        "admin":   ["{w}{cmd} @某人 1"],
-        "config":  ["{w}{cmd} new 反馈组", "{w}{cmd} 反馈组 set"],
     }
 
     # 详细帮助用：完整说明
     _CMD_DETAIL = {
         "help":    ["> {w}{cmd} [命令]", "~ {w}{cmd}  → 概览", "~ {w}{cmd} <命令>  → 详情"],
+        "config":  ["> {w}{cmd} new <名称>         创建新配置",
+                    "> {w}{cmd} rename <旧> <新>    重命名配置",
+                    "> {w}{cmd} <名称> notify      设本群为通知群",
+                    "> {w}{cmd} <名称> set         本群加入执行群",
+                    "> {w}{cmd} <名称> remove      本群移出配置",
+                    "> {w}{cmd} <名称> group       查看配置信息",
+                    "! 一个群可属于多个配置，通知群也可设为执行群"],
+        "admin":   ["> {w}{cmd} [配置] <目标> [等级]",
+                    "- -1=普通成员  ≥1 数字越大权限越低（默认1）",
+                    "! 不可设0，不可改自己",
+                    "~ {w}{cmd} @某人 1  /  {w}{cmd} 反馈组 @某人 2"],
         "punish_do":  ["> {w}{cmd} <目标> [配置] <方式> [内容] <原因>",
                     "- <目标>  @某人 或 QQ号",
                     "- [配置]  指定配置名（可选，不填=当前群所有配置）",
@@ -62,17 +73,6 @@ class HelpModule:
                     "- [配置]  指定配置名（多配置群必填）",
                     "- 无参数  全部记录表格  /  -i  图片详情",
                     "! 状态颜色：绿已执行 橙已撤销 红失败 灰不合规"],
-        "admin":   ["> {w}{cmd} [配置] <目标> [等级]",
-                    "- -1=普通成员  ≥1 数字越大权限越低（默认1）",
-                    "! 不可设0，不可改自己",
-                    "~ {w}{cmd} @某人 1  /  {w}{cmd} 反馈组 @某人 2"],
-        "config":  ["> {w}{cmd} new <名称>         创建新配置",
-                    "> {w}{cmd} rename <旧> <新>    重命名配置",
-                    "> {w}{cmd} <名称> notify      设本群为通知群",
-                    "> {w}{cmd} <名称> set         本群加入执行群",
-                    "> {w}{cmd} <名称> remove      本群移出配置",
-                    "> {w}{cmd} <名称> group       查看配置信息",
-                    "! 一个群可属于多个配置，通知群也可设为执行群"],
     }
 
     def __init__(self, dispatcher: "CommandDispatcher"):
@@ -154,6 +154,8 @@ class HelpModule:
         lines = [
             "= 可用指令",
             f"- 唤醒词: {', '.join(self.d.wake_words)}",
+            f"- 本群关联 {len(configs)} 个配置",
+            "",
         ]
 
         if not configs:
@@ -161,15 +163,12 @@ class HelpModule:
             lines.append("= ── 全局（当前群未关联配置）──")
             # 无配置群：help/config 始终显示（引导设置），其余按实际权限
             lines += self._render_filtered_cmds(self.d.global_commands,
-                {"help", "punish_do", "punish_revoke", "punish_history", "admin", "config"},
+                {"help", "config", "admin", "punish_do", "punish_revoke", "punish_history"},
                 level, w, force_visible={"help", "config"})
             lines.append("@@")
             return lines
 
-        lines.append(f"- 本群关联 {len(configs)} 个配置")
-        lines.append("")
-
-        ORDER = ["help", "punish_do", "punish_revoke", "punish_history", "admin", "config"]
+        ORDER = ["help", "config", "admin", "punish_do", "punish_revoke", "punish_history"]
 
         # 分析每个命令在各配置中的自定义情况
         customized_by: dict[str, set[str]] = {cmd: set() for cmd in ORDER}
@@ -232,7 +231,7 @@ class HelpModule:
         if force_visible is None:
             force_visible = set()
         lines = []
-        order = ["help", "punish_do", "punish_revoke", "punish_history", "admin", "config"]
+        order = ["help", "config", "admin", "punish_do", "punish_revoke", "punish_history"]
         for internal in order:
             if internal not in include:
                 continue
