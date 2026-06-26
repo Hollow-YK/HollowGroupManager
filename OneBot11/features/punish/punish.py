@@ -209,8 +209,12 @@ class PunishModule:
                         gid = int(group_id)
                         ok = await self.d.kick(gid, uid, reject_add=False)
                         if ok:
-                            await self.d.send_message(gid,
-                                f"[CQ:at,qq={user_id}] 在配置 {cfg.name} 黑名单中，已自动移出。原因：{b.reason}")
+                            await self.d.send_message(gid, [
+                                {"type": "at", "data": {"qq": user_id}},
+                                {"type": "text", "data": {
+                                    "text": f" 在配置 {cfg.name} 黑名单中，已自动移出。原因：{b.reason}"
+                                }},
+                            ])
                             kicked = True
                     except Exception as e:
                         logger.error(f"黑名单踢人异常: {e}")
