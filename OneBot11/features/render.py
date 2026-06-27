@@ -367,7 +367,7 @@ def render_question_card(expression: str, attempts: int, max_attempts: int,
     if max_attempts == -1:
         attempts_str = f"尝试次数: {attempts} / 不限"
     else:
-        attempts_str = f"尝试次数: {attempts} / {max_attempts}"
+        attempts_str = f"尝试次数: {attempts} / {max_attempts + 1}"
     lines.append(("", font_small, "#666666"))
     lines.append((attempts_str, font_small, "#E65100" if attempts > 0 else "#888888"))
 

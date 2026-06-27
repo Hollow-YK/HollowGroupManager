@@ -380,6 +380,8 @@ class VerificationModule:
             type=BlockType(btype_str),
         )
         # 全量模式默认 max_errors = 0（一题不错），用户可自行修改
+        if btype_str == "ALL":
+            blk.max_errors = 0
 
         vcfg.blocks.append(blk)
         self._configs[cfg.name] = vcfg
@@ -639,7 +641,6 @@ class VerificationModule:
         if len(blk.questions) == old_len:
             return f"未找到题目: {q_id}"
 
-        self._update_all_max_errors(blk)
         self._configs[cfg.name] = vcfg
         self._save_config(cfg.name)
         return f"已删除题目: {q_id}"
@@ -964,11 +965,11 @@ class VerificationModule:
             if vcfg.include_retry_in_total:
                 session.total_errors += 1
 
-            # 检查是否有重试次数
-            if q.max_attempts == -1 or qi.attempts < q.max_attempts:
+            # 检查是否有重试次数（max_attempts=0 → 共1次机会，max_attempts=1 → 共2次，以此类推）
+            if q.max_attempts == -1 or qi.attempts <= q.max_attempts:
                 remaining = ""
-                if q.max_attempts > 0:
-                    remaining = f"（剩余 {q.max_attempts - qi.attempts} 次）"
+                if q.max_attempts != -1:
+                    remaining = f"（剩余 {q.max_attempts + 1 - qi.attempts} 次）"
                 await self.d.send_message(
                     session.group_id, f"❌ 错误，请重试{remaining}",
                 )
@@ -1004,8 +1005,11 @@ class VerificationModule:
                 else:
                     bs.current_q_idx += 1
                     if blk.type == BlockType.ALL:
-                        # 全量模式：继续发题，全部发完后根据有无错误判定
-                        if bs.current_q_idx >= len(bs.question_instances):
+                        # 全量模式：若错误数已超限则提前结束，否则全部发完后判定
+                        if blk.max_errors != -1 and bs.error_count > blk.max_errors:
+                            bs.finished = True
+                            bs.passed = False
+                        elif bs.current_q_idx >= len(bs.question_instances):
                             bs.finished = True
                             bs.passed = (bs.error_count <= blk.max_errors)
                     elif blk.type == BlockType.RANDOM:
@@ -1079,9 +1083,10 @@ class VerificationModule:
         if png:
             await self.d.send_image(session.group_id, png)
         else:
+            total_attempts = "不限" if q.max_attempts == -1 else str(q.max_attempts + 1)
             await self.d.send_message(
                 session.group_id,
-                f"[自选题目 {idx + 1}] {expr}\n(尝试: {qi.attempts}/{self._fmt_val(q.max_attempts)})",
+                f"[自选题目 {idx + 1}] {expr}\n(尝试: {qi.attempts}/{total_attempts})",
             )
 
     async def _send_selection_list(self, session: VerifySession,
@@ -1121,9 +1126,8 @@ class VerificationModule:
             )
             return True
 
-        # 块错误超限 (ALL 模式一题失败即块失败已在调用处处理)
-        if blk.type != BlockType.ALL and blk.max_errors != -1 and \
-           bs.error_count >= blk.max_errors:
+        # 块错误超限
+        if blk.max_errors != -1 and bs.error_count > blk.max_errors:
             bs.finished = True
             bs.passed = False
             await self._fail_session(
@@ -1197,10 +1201,10 @@ class VerificationModule:
             await self.d.send_image(session.group_id, png)
         else:
             # 回退纯文本
-            attempts_hint = self._fmt_val(q.max_attempts)
+            total_attempts = "不限" if q.max_attempts == -1 else str(q.max_attempts + 1)
             await self.d.send_message(
                 session.group_id,
-                f"{progress}{expr}\n(尝试: {qi.attempts}/{attempts_hint})",
+                f"{progress}{expr}\n(尝试: {qi.attempts}/{total_attempts})",
             )
 
     # ════════════════════════════════════════════════════════════
