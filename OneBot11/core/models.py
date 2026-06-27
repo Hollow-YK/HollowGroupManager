@@ -54,6 +54,38 @@ class CommandConfig(BaseModel):
                 "group":  CommandItem(enabled=True),
                 "list":   CommandItem(enabled=True),
             }),
+            "approval":       CommandItem(enabled=True, names=["ap", "approval"], min_level=1, sub={
+                "on":       CommandItem(enabled=True),
+                "off":      CommandItem(enabled=True),
+                "status":   CommandItem(enabled=True, min_level=-1),
+                "regex":    CommandItem(enabled=True),
+                "reject":   CommandItem(enabled=True),
+                "mismatch": CommandItem(enabled=True),
+                "welcome":  CommandItem(enabled=True),
+            }),
+            "verify":         CommandItem(enabled=True, names=["v", "verify"], min_level=1, sub={
+                "on":       CommandItem(enabled=True),
+                "off":      CommandItem(enabled=True),
+                "status":   CommandItem(enabled=True, min_level=-1),
+                "welcome":  CommandItem(enabled=True),
+                "maxerr":   CommandItem(enabled=True),
+                "retry":    CommandItem(enabled=True),
+                "timeout":    CommandItem(enabled=True),
+                "bottimeout": CommandItem(enabled=True),
+                "block":    CommandItem(enabled=True, sub={
+                    "add":    CommandItem(enabled=True),
+                    "remove": CommandItem(enabled=True),
+                    "list":   CommandItem(enabled=True),
+                    "move":   CommandItem(enabled=True),
+                    "edit":   CommandItem(enabled=True),
+                }),
+                "question": CommandItem(enabled=True, sub={
+                    "add":    CommandItem(enabled=True),
+                    "remove": CommandItem(enabled=True),
+                    "list":   CommandItem(enabled=True),
+                    "edit":   CommandItem(enabled=True),
+                }),
+            }),
         })
 
 

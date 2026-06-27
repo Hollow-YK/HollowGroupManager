@@ -401,6 +401,8 @@ class CommandDispatcher:
                 triggered = True
                 break
         if not triggered:
+            # 非唤醒词消息 → 分发给 message.group 监听器（如验证答题）
+            await self._dispatch_event("message.group", event)
             return None
 
         # 权限
@@ -450,6 +452,26 @@ class CommandDispatcher:
         """处理通知事件 → 分发给注册的事件监听器"""
         notice_type = event.get("notice_type", "")
         event_key = f"notice.{notice_type}"
+        for listener in self._event_listeners.get(event_key, []):
+            try:
+                await listener(event)
+            except Exception:
+                logger.exception(f"事件监听器异常: {event_key}")
+
+    async def handle_request(self, event: dict):
+        """处理请求事件 → 分发给注册的事件监听器"""
+        request_type = event.get("request_type", "")
+        sub_type = event.get("sub_type", "")
+        if request_type and sub_type:
+            event_key = f"request.{request_type}_{sub_type}"
+            for listener in self._event_listeners.get(event_key, []):
+                try:
+                    await listener(event)
+                except Exception:
+                    logger.exception(f"请求事件监听器异常: {event_key}")
+
+    async def _dispatch_event(self, event_key: str, event: dict):
+        """分发事件到指定 key 的所有监听器"""
         for listener in self._event_listeners.get(event_key, []):
             try:
                 await listener(event)

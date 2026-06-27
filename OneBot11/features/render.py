@@ -338,6 +338,73 @@ def render_config_list(configs: list[tuple[str, str, str, int]]) -> bytes:
     return buf.getvalue()
 
 
+# ---- 验证题目卡片 ----
+
+def render_question_card(expression: str, attempts: int, max_attempts: int,
+                          progress: str = "", footer: str = "") -> bytes:
+    """渲染验证题目卡片。expression 为题目文本（计算题算式或问答题文本）。"""
+    width, padding = 460, 24
+    font_q = _get_font(22, bold=True)
+    font_body = _get_font(17, bold=False)
+    font_small = _get_font(15, bold=False)
+
+    # 预计算文本行
+    lines: list[tuple[str, object, str]] = []  # (text, font, color)
+
+    if progress:
+        lines.append((progress, font_small, "#666666"))
+        lines.append(("", font_small, "#666666"))
+
+    lines.append(("📝 请回答以下题目", font_small, "#888888"))
+    lines.append(("", font_small, "#888888"))
+    lines.append((expression, font_q, "#1A237E"))
+
+    if footer:
+        lines.append(("", font_small, "#666666"))
+        lines.append((footer, font_small, "#666666"))
+
+    # 尝试次数
+    if max_attempts == -1:
+        attempts_str = f"尝试次数: {attempts} / 不限"
+    else:
+        attempts_str = f"尝试次数: {attempts} / {max_attempts + 1}"
+    lines.append(("", font_small, "#666666"))
+    lines.append((attempts_str, font_small, "#E65100" if attempts > 0 else "#888888"))
+
+    # 计算高度
+    line_heights = []
+    total_h = padding
+    for text, font, _ in lines:
+        if not text:
+            h = 6
+        else:
+            try:
+                h = int(font.getbbox(text)[3] - font.getbbox(text)[1]) + 4
+            except AttributeError:
+                h = font.size + 4
+        line_heights.append(h)
+        total_h += h
+    total_h += padding
+
+    img = Image.new("RGB", (width, total_h), "#FFFFFF")
+    draw = ImageDraw.Draw(img)
+
+    # 顶部色条
+    draw.rectangle((0, 0, width, 4), fill="#1565C0")
+
+    y = padding
+    for (text, font, color), h in zip(lines, line_heights):
+        if not text:
+            y += h
+            continue
+        draw.text((padding, y), text, fill=color, font=font)
+        y += h
+
+    buf = BytesIO()
+    img.save(buf, format="PNG")
+    return buf.getvalue()
+
+
 def _truncate(text: str, font: ImageFont.FreeTypeFont, max_w: int) -> str:
     w = _get_text_width(text, font)
     if w <= max_w:
@@ -345,3 +412,56 @@ def _truncate(text: str, font: ImageFont.FreeTypeFont, max_w: int) -> str:
     while text and _get_text_width(text + "…", font) > max_w:
         text = text[:-1]
     return text + "…" if text else "…"
+
+
+# ---- 验证答题说明图片 ----
+
+def render_verify_guide() -> bytes:
+    """渲染进群验证答题说明图片。"""
+    width, height = 480, 320
+    img = Image.new("RGB", (width, height), "#FFFFFF")
+    draw = ImageDraw.Draw(img)
+
+    font_title = _get_font(24, bold=True)
+    font_body = _get_font(18, bold=False)
+    font_example = _get_font(16, bold=False)
+
+    # 标题
+    title = "📋 答题说明"
+    draw.text((30, 20), title, fill="#1a1a2e", font=font_title)
+
+    # 分隔线
+    draw.line((30, 55, width - 30, 55), fill="#E0E0E0", width=1)
+
+    lines = [
+        ("• 直接输入答案发送即可，无需加任何前缀", font_body, "#333333"),
+        ("", font_body, "#333333"),
+        ("计算题", font_title, "#16213e"),
+        ("  输入计算结果数字（除法只保留整数部分，小数部分去尾）", font_body, "#555555"),
+        ("  例: 3 + 5 = ? → 8", font_example, "#888888"),
+        ("      7 / 2 = ? → 3", font_example, "#888888"),
+        ("", font_body, "#333333"),
+        ("问答题", font_title, "#16213e"),
+        ("  按题目要求输入答案文本", font_body, "#555555"),
+        ("  例: 群规是什么?  →  回复对应内容", font_example, "#888888"),
+        ("", font_body, "#333333"),
+        ("自选题", font_title, "#16213e"),
+        ("  输入数字序号选择题目作答", font_body, "#555555"),
+        ("", font_body, "#333333"),
+        ("⚠ 每题有尝试次数限制，请认真作答", font_example, "#CC6600"),
+    ]
+
+    y = 70
+    for text, font, color in lines:
+        if not text:
+            y += 4
+            continue
+        draw.text((30, y), text, fill=color, font=font)
+        try:
+            y += int(font.getbbox(text)[3] - font.getbbox(text)[1]) + 6
+        except AttributeError:
+            y += font.size + 6
+
+    buf = BytesIO()
+    img.save(buf, format="PNG")
+    return buf.getvalue()
