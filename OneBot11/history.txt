@@ -1,6 +1,31 @@
 多群联动管理Bot — 版本历史
 ============================
 
+V1.0.6-beta.1 (2026-06-28)
+--------------------
+▸ 框架重构：core/commands.py（~1340 行）拆分为 core/dispatcher.py + 6 功能模块
+▸ 注册制架构：dispatcher 提供 register_command() / register_event() 接口，功能模块无需修改框架代码
+▸ 统一 Bot API：语义化封装 send_message() / kick() / ban() / unban() / send_image() 等协议操作
+▸ 功能模块化：
+  - features/basic/（基础功能）：help.py、config_cmd.py、admin.py
+  - features/punish/（处罚系统）：punish.py（含黑名单入群监听）、rp.py、history.py
+  - features/verify/（进群验证 — 新增）
+  - features/render.py：Pillow 图片渲染（从 core/ 迁入）
+▸ 进群验证系统（新增，~2100 行）：
+  - 答题验证（verification）：新成员入群后多模式答题，支持计算题 / 问答题，Block 机制支持 ALL / RANDOM / SELECT 出题策略
+  - 加群审批（approval）：正则匹配入群申请 comment，自动同意 / 拒绝 / 忽略
+  - 图片卡片渲染：题目卡片 + 验证指引图（Pillow），独立于文本渲染管线
+  - 每配置独立验证方案 + 每群独立开关，非 Bot 审批入群支持独立超时
+  - 指令：/verify（on/off/status/welcome/maxerr/retry/timeout/bottimeout/block/question 子命令）
+  - 指令：/approval（on/off/status/regex/reject/mismatch/welcome 子命令）
+  - 监听 request.group_add 审批加群请求、notice.group_increase 触发答题、message.group 捕获答案
+▸ /config list 指令：列出已有配置，支持图片渲染（Pillow 表格）
+▸ 消息发送改用数组格式：符合 OneBot v11 message 段规范
+▸ 命令显示优化：调整 help / admin 输出格式，提升可读性
+▸ 修复：新注册命令在 command.json 缺失时无法解析
+▸ 修复：help 命令配置分组显示异常
+▸ 修复：render / verification 模块小问题
+
 V1.0.5 (2026-06-25)
 --------------------
 ▸ 多配置架构：单管理组 → 多配置独立存储（data/<配置名>/punish/）

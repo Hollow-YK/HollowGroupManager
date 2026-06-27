@@ -8,7 +8,7 @@ HollowGroupManager 提供两个版本：**QFun 版**（Android 插件）和 **On
 
 | 功能 | 说明 |
 |------|------|
-| 指令集 | 6 个指令（`/help` `/p` `/rp` `/h` `/a` `/config`），语法和参数相同。 |
+| 指令集 | OneBot11 8 个指令（`/help` `/config` `/admin` `/punish` `/revokepunish` `/history` `/verify` `/approval`），QFun 6 个（不含 verify/approval）。语法和参数相同。 |
 | 权限模型 | 多级（0/≥1/-1），各命令通过 `command.json` 的 `min_level` 控制 |
 | 命令别名 | `command.json` 中 `names` 字段自定义（如 `["p", "punish"]`） |
 | 多配置架构 | `data/<配置名>/punish/` 子目录结构，一个群可属于多个配置 |

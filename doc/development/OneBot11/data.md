@@ -66,8 +66,8 @@ class PunishRecord(BaseModel):
     reason: str = ""
     status: str = ""          # 不合规 / 已执行 / 执行失败 / 部分失败 / 已撤销
     fail_detail: str = Field(default="", alias="failDetail")
-    revoke_time: int = Field(default=0, alias="revokeTime")
-    revoke_reason: str = Field(default="", alias="revokeReason")
+    revokepunish_time: int = Field(default=0, alias="revokepunishTime")
+    revokepunish_reason: str = Field(default="", alias="revokepunishReason")
 
     model_config = {"populate_by_name": True, "alias_generator": _to_camel}
 
@@ -76,7 +76,7 @@ class PunishRecord(BaseModel):
     def _coerce_ints(cls, data: Any) -> Any:
         """兼容 Java 版可能出现的字符串数字"""
         if isinstance(data, dict):
-            for field_name in ("id", "sender", "time", "target", "revokeTime"):
+            for field_name in ("id", "sender", "time", "target", "revokepunishTime"):
                 if field_name in data:
                     try:
                         data[field_name] = int(data[field_name])
@@ -116,6 +116,9 @@ data/
 │   ├── groups.json           # ConfigInfo
 │   ├── command.json          # 配置级命令覆盖（可选）
 │   ├── permissions.json      # {QQ号: 权限等级}
+│   ├── verify_config.json    # 进群验证方案（v1.0.6）
+│   ├── approval_config.json  # 加群审批方案（v1.0.6）
+│   ├── verify_groups.json    # 群验证开关（v1.0.6）
 │   └── punish/
 │       ├── records.json      # [PunishRecord]
 │       └── blacklist.json    # [BlacklistItem]

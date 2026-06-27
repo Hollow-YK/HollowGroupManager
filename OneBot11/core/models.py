@@ -41,10 +41,6 @@ class CommandConfig(BaseModel):
     def defaults(cls) -> "CommandConfig":
         return cls(commands={
             "help":           CommandItem(enabled=True, names=["help"], min_level=-1),
-            "punish_do":      CommandItem(enabled=True, names=["p", "punish"], min_level=1),
-            "punish_revoke":  CommandItem(enabled=True, names=["rp", "revoke"], min_level=1),
-            "punish_history": CommandItem(enabled=True, names=["h", "history"], min_level=1),
-            "admin":          CommandItem(enabled=True, names=["a", "admin"], min_level=0),
             "config":         CommandItem(enabled=True, names=["config"], min_level=0, sub={
                 "new":    CommandItem(enabled=True),
                 "rename": CommandItem(enabled=True),
@@ -54,7 +50,11 @@ class CommandConfig(BaseModel):
                 "group":  CommandItem(enabled=True),
                 "list":   CommandItem(enabled=True),
             }),
-            "approval":       CommandItem(enabled=True, names=["ap", "approval"], min_level=1, sub={
+            "admin":          CommandItem(enabled=True, names=["admin", "a"], min_level=0),
+            "punish_do":      CommandItem(enabled=True, names=["punish", "p"], min_level=1),
+            "punish_revoke":  CommandItem(enabled=True, names=["revokepunish", "rp"], min_level=1),
+            "punish_history": CommandItem(enabled=True, names=["history", "h"], min_level=1),
+            "approval":       CommandItem(enabled=True, names=["approval", "ap"], min_level=1, sub={
                 "on":       CommandItem(enabled=True),
                 "off":      CommandItem(enabled=True),
                 "status":   CommandItem(enabled=True, min_level=-1),
@@ -63,10 +63,10 @@ class CommandConfig(BaseModel):
                 "mismatch": CommandItem(enabled=True),
                 "welcome":  CommandItem(enabled=True),
             }),
-            "verify":         CommandItem(enabled=True, names=["v", "verify"], min_level=1, sub={
+            "verify":         CommandItem(enabled=True, names=["verify", "v"], min_level=1, sub={
                 "on":       CommandItem(enabled=True),
                 "off":      CommandItem(enabled=True),
-                "status":   CommandItem(enabled=True, min_level=-1),
+                "status":   CommandItem(enabled=True),
                 "welcome":  CommandItem(enabled=True),
                 "maxerr":   CommandItem(enabled=True),
                 "retry":    CommandItem(enabled=True),

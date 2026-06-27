@@ -36,11 +36,14 @@ HollowGroupManager/
 │   │   ├── basic/                 #   [基础功能]
 │   │   │   ├── help.py            #   /help 指令
 │   │   │   ├── config_cmd.py      #   /config 多配置管理
-│   │   │   └── admin.py           #   /a 权限管理
-│   │   └── punish/                #   [punish功能]
-│   │       ├── punish.py          #   /p 处罚 + 黑名单入群监听
-│   │       ├── rp.py              #   /rp 撤销处罚
-│   │       └── history.py         #   /h 查询记录
+│   │   │   └── admin.py           #   /admin 权限管理
+│   │   ├── punish/                #   [处罚系统]
+│   │   │   ├── punish.py          #   /punish 处罚 + 黑名单入群监听
+│   │   │   ├── rp.py              #   /revokepunish 撤销处罚
+│   │   │   └── history.py         #   /history 查询记录
+│   │   └── verify/                #   [进群验证]
+│   │       ├── verification.py    #   答题验证
+│   │       └── approval.py        #   加群审批
 │   ├── tools/                     # 独立工具
 │   │   └── migrate.py             # 旧版数据迁移
 │   ├── data/                      # 运行时数据
@@ -49,9 +52,12 @@ HollowGroupManager/
 │   │       ├── groups.json        # 通知群 + 执行群
 │   │       ├── command.json       # 命令覆盖（可选）
 │   │       ├── permissions.json   # 权限映射
-│   │       └── punish/            # 处罚子系统
-│   │           ├── records.json
-│   │           └── blacklist.json
+│   │       ├── punish/            # 处罚子系统
+│   │       │   ├── records.json
+│   │       │   └── blacklist.json
+│   │       ├── verify_config.json # 验证方案
+│   │       ├── approval_config.json  # 审批方案
+│   │       └── verify_groups.json    # 群验证开关
 │   └── logs/                      # 日志文件（时间命名）
 ├── doc/                           # 项目文档
 │   ├── comparison.md              # 两版详细对比
@@ -75,7 +81,7 @@ QQ消息 → 框架/协议层 → 消息处理器
   → 唤醒词匹配（config 中的 wake_words）
   → 命令解析（别名 → 内部名，通过 command.json）
   → 权限检查（super_admins + 各配置 permissions.json + command.min_level）
-  → 指令路由（/help, /p, /rp, /h, /a, /config）
+  → 指令路由（/help, /config, /admin, /punish, /revokepunish, /history, /verify, /approval）
   → 业务逻辑
   → 持久化到 data/<配置名>/
 ```
@@ -104,7 +110,7 @@ QQ消息 → 框架/协议层 → 消息处理器
 | 等级 | 角色 | 配置方式 | 权限 |
 | --- | --- | --- | --- |
 | 0 | 超级管理员 | 配置文件（`superAdmins` / `super_admins`） | 全部指令 |
-| ≥1 | 管理员 | `/a` 指令设置 | 数字越小权限越高，受 `command.json` `min_level` 限制 |
+| ≥1 | 管理员 | `/admin` 指令设置 | 数字越小权限越高，受 `command.json` `min_level` 限制 |
 | -1 | 普通成员 | 默认 | 仅 `min_level: -1` 的命令 |
 
 ### 数据文件
@@ -118,6 +124,9 @@ QQ消息 → 框架/协议层 → 消息处理器
 | `permissions.json` | 配置根 | 权限映射（`Dict[str, int]`） |
 | `records.json` | `punish/` | 处罚记录（`PunishRecord`） |
 | `blacklist.json` | `punish/` | 黑名单（`BlacklistItem`） |
+| `verify_config.json` | 配置根 | 进群答题验证方案 |
+| `approval_config.json` | 配置根 | 加群审批方案 |
+| `verify_groups.json` | 配置根 | 群验证开关 |
 
 所有数据文件使用 `.tmp` 原子写入，加载失败时自动尝试 `.tmp` 恢复。
 
@@ -132,7 +141,7 @@ QQ消息 → 框架/协议层 → 消息处理器
   "commands": {
     "punish_do": {
       "enabled": true,
-      "names": ["p", "punish"],
+      "names": ["punish", "p"],
       "min_level": 1
     },
     "config": {
@@ -157,7 +166,7 @@ QQ消息 → 框架/协议层 → 消息处理器
 | 字段 | 类型 | 说明 |
 | --- | --- | --- |
 | `enabled` | `bool` | 是否启用该命令 |
-| `names` | `list[str]` | 外部命令名列表（如 `["p", "punish"]`），第一个为主名 |
+| `names` | `list[str]` | 外部命令名列表（如 `["punish", "p"]`），第一个为主名 |
 | `min_level` | `int?` | 最低权限等级。`null`=继承上级，`-1`=所有人，`0`=超管，`≥1`=管理员（越小权限越高） |
 | `sub` | `dict?` | 子命令配置（递归结构），如 `/config new` |
 
