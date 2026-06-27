@@ -8,7 +8,7 @@ import json
 import logging
 import shutil
 from pathlib import Path
-from typing import TypeVar
+from typing import Optional, TypeVar
 
 from pydantic import BaseModel, TypeAdapter
 
@@ -267,6 +267,66 @@ class DataManager:
         # 直接全量保存，简洁可靠
         p = self._config_dir(name) / "command.json"
         self._write_file(p, commands.model_dump(mode="json", by_alias=True))
+
+    # ==================== 单配置的 verify/approval ====================
+
+    def _verify_dir(self, name: str) -> Path:
+        """获取 verify 子目录，自动创建"""
+        p = self._config_dir(name) / "verify"
+        p.mkdir(parents=True, exist_ok=True)
+        return p
+
+    def load_approval_config(self, name: str) -> Optional[dict]:
+        """加载加群审批方案: data/<name>/verify/approval.json → dict"""
+        p = self._verify_dir(name) / "approval.json"
+        data = self._read_file(p)
+        if isinstance(data, dict):
+            return data
+        return None
+
+    def save_approval_config(self, name: str, config: dict):
+        """保存加群审批方案"""
+        p = self._verify_dir(name) / "approval.json"
+        self._save_dict_file(p, config)
+
+    def load_approval_groups(self, name: str) -> dict:
+        """加载加群审批群开关: data/<name>/verify/approval_groups.json → {group_id: {enabled: bool}}"""
+        p = self._verify_dir(name) / "approval_groups.json"
+        data = self._read_file(p)
+        if isinstance(data, dict):
+            return data
+        return {}
+
+    def save_approval_groups(self, name: str, groups: dict):
+        """保存加群审批群开关"""
+        p = self._verify_dir(name) / "approval_groups.json"
+        self._save_dict_file(p, groups)
+
+    def load_verify_config(self, name: str) -> Optional[dict]:
+        """加载进群验证方案: data/<name>/verify/verify.json → dict"""
+        p = self._verify_dir(name) / "verify.json"
+        data = self._read_file(p)
+        if isinstance(data, dict):
+            return data
+        return None
+
+    def save_verify_config(self, name: str, config: dict):
+        """保存进群验证方案"""
+        p = self._verify_dir(name) / "verify.json"
+        self._save_dict_file(p, config)
+
+    def load_verify_groups(self, name: str) -> dict:
+        """加载进群验证群开关: data/<name>/verify/verify_groups.json → {group_id: {enabled: bool}}"""
+        p = self._verify_dir(name) / "verify_groups.json"
+        data = self._read_file(p)
+        if isinstance(data, dict):
+            return data
+        return {}
+
+    def save_verify_groups(self, name: str, groups: dict):
+        """保存进群验证群开关: data/<name>/verify/verify_groups.json"""
+        p = self._verify_dir(name) / "verify_groups.json"
+        self._save_dict_file(p, groups)
 
     # ==================== 批量保存 ====================
 

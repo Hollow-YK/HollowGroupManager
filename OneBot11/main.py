@@ -29,6 +29,8 @@ from features.basic.admin import AdminModule
 from features.punish.punish import PunishModule
 from features.punish.rp import RpModule
 from features.punish.history import HistoryModule
+from features.verify.approval import ApprovalModule
+from features.verify.verification import VerificationModule
 
 logger = logging.getLogger("Hollow")
 
@@ -169,6 +171,18 @@ async def main():
         HistoryModule(dispatcher).handle)
     dispatcher.register_event("notice.group_increase",
         punish_mod.on_member_join)
+
+    # ---- 加群审批 + 进群验证 ----
+    approval_mod = ApprovalModule(dispatcher)
+    verify_mod = VerificationModule(dispatcher, approval_mod)
+
+    dispatcher.register_command("approval", approval_mod.handle)
+    dispatcher.register_event("request.group_add", approval_mod.on_request_group_add)
+    dispatcher.register_event("notice.group_increase", approval_mod.on_member_increase)
+
+    dispatcher.register_command("verify", verify_mod.handle)
+    dispatcher.register_event("notice.group_increase", verify_mod.on_member_increase)
+    dispatcher.register_event("message.group", verify_mod.on_raw_message)
 
     # ---- 事件 ----
     handler = EventHandler(api, dispatcher)

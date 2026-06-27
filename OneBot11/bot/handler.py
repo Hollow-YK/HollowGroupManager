@@ -37,5 +37,7 @@ class EventHandler:
 
     async def on_request(self, event: dict):
         """处理请求事件（加群邀请等）"""
-        # 暂不处理，可扩展
-        pass
+        try:
+            await self.cmd.handle_request(event)
+        except Exception:
+            logger.exception("请求处理异常")

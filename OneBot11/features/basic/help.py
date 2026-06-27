@@ -21,6 +21,8 @@ class HelpModule:
         "punish_do": "处罚成员",
         "punish_revoke": "撤销处罚",
         "punish_history": "查询处罚记录",
+        "approval": "加群审批",
+        "verify": "进群验证",
     }
 
     # 概览用：格式行（{cmd} 替换为配置中的第一个命令名）
@@ -31,6 +33,8 @@ class HelpModule:
         "punish_do":  "{w}{cmd} <目标> [配置] <方式> [内容] <原因>",
         "punish_revoke":  "{w}{cmd} [配置] <记录ID> [撤销原因]",
         "punish_history": "{w}{cmd} [配置] [目标] [-i]",
+        "approval": "{w}{cmd} <on|off|status|regex|reject|mismatch|welcome>",
+        "verify":  "{w}{cmd} <on|off|status|block|question|...>",
     }
 
     # 概览用：示例（{cmd} 替换为配置中的第一个命令名）
@@ -41,6 +45,8 @@ class HelpModule:
         "punish_do":  ["{w}{cmd} @某人 mute 1d2h 广告刷屏"],
         "punish_revoke":  ["{w}{cmd} 5 误判"],
         "punish_history": ["{w}{cmd} @某人 -i"],
+        "approval": ["{w}{cmd} on", "{w}{cmd} regex 答案"],
+        "verify":  ["{w}{cmd} block add ALL", "{w}{cmd} question add <id> qa 答案|42"],
     }
 
     # 详细帮助用：完整说明
@@ -73,6 +79,75 @@ class HelpModule:
                     "- [配置]  指定配置名（多配置群必填）",
                     "- 无参数  全部记录表格  /  -i  图片详情",
                     "! 状态颜色：绿已执行 橙已撤销 红失败 灰不合规"],
+        "approval":  ["> {w}{cmd} <on|off|status>              群开关",
+                    "> {w}{cmd} regex <正则>                  匹配正则",
+                    "> {w}{cmd} reject <文本>                 拒绝原因",
+                    "> {w}{cmd} mismatch <reject|ignore>      不匹配行为",
+                    "> {w}{cmd} welcome <文本>                入群欢迎（{@新成员}）",
+                    "- 入群申请 comment 匹配正则 → 同意",
+                    "- 不匹配时: reject=拒绝  ignore=忽略(交管理员)",
+                    "~ {w}{cmd} regex 答案  /  {w}{cmd} welcome 欢迎{@新成员}"],
+        "verify":    [
+                    "= 群开关",
+                    "> {w}{cmd} on|off         开启/关闭本群验证（需群管理）",
+                    "> {w}{cmd} status          查看状态：开关/方案概览/超时",
+                    "",
+                    "= 方案设置",
+                    "> {w}{cmd} welcome <文本>  欢迎消息模板",
+                    "  占位符: {@新成员} {总最多出错数}",
+                    "> {w}{cmd} maxerr <N>      总最多出错次数，-1=不限制",
+                    "> {w}{cmd} retry           切换：重试错误是否计入总出错数",
+                    "> {w}{cmd} timeout <秒>    非Bot审批成员验证超时，0=不限",
+                    "> {w}{cmd} bottimeout <秒> Bot审批成员验证超时，0=不限",
+                    "",
+                    "= 考核块 (block) — 按列表顺序执行",
+                    "> {w}{cmd} block add <ALL|RANDOM|SELECT>",
+                    "  ALL    全量模式：答完所有题目，允许错 max_errors 题",
+                    "  RANDOM 随机模式：随机抽取指定数量，答对达标即过",
+                    "  SELECT 自选模式：用户自选题目序号作答",
+                    "> {w}{cmd} block remove <id>",
+                    "> {w}{cmd} block list",
+                    "> {w}{cmd} block move <id> <位置>   位置从1开始",
+                    "> {w}{cmd} block edit <id> <key> <value>",
+                    "  key: description   块描述文本（支持占位符）",
+                    "       max_errors    本块最多允许错误数（-1=不限）",
+                    "       max_questions RANDOM最多出题数（-1=全部）",
+                    "       min_correct   RANDOM最少答对数",
+                    "       required_correct SELECT需答对数量",
+                    "  块描述占位符: {题库总数}{总题目数}{随机出题数}{最多出错数}{最少答对数}{需答对数量}",
+                    "",
+                    "= 题目 (question)",
+                    "> {w}{cmd} question add <block_id> calc [参数...]",
+                    "  参数: addSub mulDiv square maxAttempts=N numRegex=... stepRegex=...",
+                    "  例: {w}{cmd} question add a1 calc addSub mulDiv attempts=5",
+                    "  生成规则: 步数从stepRegex取，运算数从numRegex取，左到右无优先级",
+                    "> {w}{cmd} question add <block_id> qa <题目>|<答案正则> [maxAttempts] [listText]",
+                    "  例: {w}{cmd} question add a1 qa 群规是什么?|.*公告.* 3 群规问答",
+                    "  | 分隔题目和答案正则，listText用于自选块列表显示",
+                    "> {w}{cmd} question remove <block_id> <q_id>",
+                    "> {w}{cmd} question list <block_id>",
+                    "> {w}{cmd} question edit <block_id> <q_id> <key> <value>",
+                    "  # 通用",
+                    "  max_attempts   每题最多尝试次数（-1=无限, 0=一次错即失败）",
+                    "  # 计算题",
+                    "  add_sub        是否含加减（true/false）",
+                    "  mul_div        是否含乘除（true/false）",
+                    "  square         是否含平方（true/false）",
+                    "  num_regex      运算数范围正则，如 [1-9]\\d{0,2}",
+                    "  step_regex     运算符数量正则，如 [1-3]",
+                    "  square_num_regex  平方底数专用正则（空则用num_regex）",
+                    "  # 问答题",
+                    "  question_text  题目文本（支持{每题尝试次数}）",
+                    "  answer_regex   答案匹配正则",
+                    "  list_text      自选块列表显示文本（支持{每题尝试次数}）",
+                    "",
+                    "= 占位符一览",
+                    "  欢迎:   {@新成员} {总最多出错数}",
+                    "  块描述: {题库总数} {总题目数} {随机出题数} {最多出错数} {最少答对数} {需答对数量}",
+                    "  题目:   {每题尝试次数}",
+                    "! 每个配置拥有一份独立验证方案，各群通过 on/off 独立控制开关",
+                    "~ {w}{cmd} block add ALL",
+                    "~ {w}{cmd} question add <id> qa 答案|42 3",],
     }
 
     def __init__(self, dispatcher: "CommandDispatcher"):
@@ -163,12 +238,12 @@ class HelpModule:
             lines.append("= ── 全局（当前群未关联配置）──")
             # 无配置群：help/config 始终显示（引导设置），其余按实际权限
             lines += self._render_filtered_cmds(self.d.global_commands,
-                {"help", "config", "admin", "punish_do", "punish_revoke", "punish_history"},
+                {"help", "config", "admin", "punish_do", "punish_revoke", "punish_history", "approval", "verify"},
                 level, w, force_visible={"help", "config"})
             lines.append("@@")
             return lines
 
-        ORDER = ["help", "config", "admin", "punish_do", "punish_revoke", "punish_history"]
+        ORDER = ["help", "config", "admin", "punish_do", "punish_revoke", "punish_history", "approval", "verify"]
 
         # 分析每个命令在各配置中的自定义情况
         customized_by: dict[str, set[str]] = {cmd: set() for cmd in ORDER}
@@ -231,7 +306,7 @@ class HelpModule:
         if force_visible is None:
             force_visible = set()
         lines = []
-        order = ["help", "config", "admin", "punish_do", "punish_revoke", "punish_history"]
+        order = ["help", "config", "admin", "punish_do", "punish_revoke", "punish_history", "approval", "verify"]
         for internal in order:
             if internal not in include:
                 continue

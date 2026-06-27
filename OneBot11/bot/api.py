@@ -124,6 +124,11 @@ class OneBotAPI:
 
     # ==================== 群成员管理 ====================
 
+    async def get_login_info(self) -> Optional[dict]:
+        """获取机器人自身信息（user_id, nickname）"""
+        data = await self._call("get_login_info", {})
+        return data if isinstance(data, dict) else None
+
     async def get_group_member_list(self, group_id: int) -> Optional[list[dict]]:
         data = await self._call("get_group_member_list", {"group_id": group_id})
         return data if isinstance(data, list) else None
@@ -140,6 +145,17 @@ class OneBotAPI:
                             duration: int) -> bool:
         data = await self._call("set_group_ban", {
             "group_id": group_id, "user_id": user_id, "duration": duration,
+        })
+        return data is not None
+
+    # ==================== 请求处理 ====================
+
+    async def set_group_add_request(self, flag: str, sub_type: str,
+                                     approve: bool, reason: str = "") -> bool:
+        """处理加群请求 / 邀请。sub_type: add | invite"""
+        data = await self._call("set_group_add_request", {
+            "flag": flag, "sub_type": sub_type,
+            "approve": approve, "reason": reason,
         })
         return data is not None
 
