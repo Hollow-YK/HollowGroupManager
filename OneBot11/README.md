@@ -2,7 +2,7 @@
 
 基于 **[OneBot v11 标准协议](https://github.com/botuniverse/onebot-11)** 的多群联动管理 Bot。纯 Python 实现，不依赖任何 Bot 框架，支持 HTTP / WebSocket 多种通信模式。
 
-> 本项目另提供 [QFun 版](../QFun/README.md)，基于 QFun Plugin 框架直接在 Android QQ 内运行。两版功能等价、数据格式兼容。
+> 本项目另提供 [QFun 版](../QFun/README.md)，基于 QFun Plugin 框架直接在 Android QQ 内运行。1.0.5 及以前两版功能等价、数据格式兼容；1.0.6 起 QFun 版更新将放缓。
 >
 > 📖 [详细对比](../doc/comparison.md) · [开发文档](../doc/development/OneBot11/) · [项目总览](../README.md)
 
@@ -98,26 +98,28 @@ python main.py
 
 ## 指令参考
 
-> `[唤醒词]` 为 `plugin.wake_words` 中配置的前缀（默认 `/`、`!`、`。`）。`QQ用户` 支持 @某人 或 QQ 号。命令名可通过 `command.json` 自定义（如 `/p` 别名 `/punish`）。
+> `[唤醒词]` 为 `plugin.wake_words` 中配置的前缀（默认 `/`、`!`、`。`）。`QQ用户` 支持 @某人 或 QQ 号。命令名可通过 `command.json` 自定义（如 `/punish` 别名 `/p`）。
 
 | 指令 | 默认权限 | 格式 | 说明 |
 | --- | --- | --- | --- |
 | `/help` | -1 | `[唤醒词]help [命令]` | 按配置分组显示可用指令 |
-| `/p` | 1 | `[唤醒词]p [配置] <QQ用户> <方式> [内容] <原因>` | 处罚：`kick [f]` / `mute 时长` / `warn` |
-| `/h` | 1 | `[唤醒词]h [配置] [QQ用户] [-i]` | 查询：无参=表格 / 有参=汇总 / `-i`=详情 |
-| `/rp` | 1 | `[唤醒词]rp [配置] <记录ID> [撤销原因]` | 撤销处罚（多配置群必填配置名） |
-| `/a` | 0 | `[唤醒词]a [配置] <QQ用户> [等级]` | 设权限等级（-1=普通，≥1 数字越大越低） |
-| `/config` | 0 | `[唤醒词]config <子命令>` | 配置管理：new / rename / notify / set / remove / group |
+| `/config` | 0 | `[唤醒词]config <子命令>` | 配置管理：new / rename / notify / set / remove / group / list |
+| `/admin` | 0 | `[唤醒词]admin [配置] <QQ用户> [等级]` | 设权限等级（-1=普通，≥1 数字越大越低） |
+| `/punish` | 1 | `[唤醒词]punish [配置] <QQ用户> <方式> [内容] <原因>` | 处罚：`kick [f]` / `mute 时长` / `warn` |
+| `/revokepunish` | 1 | `[唤醒词]revokepunish [配置] <记录ID> [撤销原因]` | 撤销处罚（多配置群必填配置名） |
+| `/history` | 1 | `[唤醒词]history [配置] [QQ用户] [-i]` | 查询：无参=表格 / 有参=汇总 / `-i`=详情 |
+| `/verify` | 0 | `[唤醒词]verify <子命令>` | 进群答题验证：on / off / status / welcome / block / question 等 |
+| `/approval` | 0 | `[唤醒词]approval <子命令>` | 加群审批：on / off / status / regex / reject / mismatch / welcome |
 
 禁言时长：纯数字=天，支持 `1d2h30m`、`3h`、`30m` 等组合格式。各命令的启用、名称、权限要求可在 `data/command.json`（全局）和各配置的 `command.json` 中自定义。
 
 ### 处罚示例
 
 ```text
-/p @某人 mute 1d2h 广告刷屏     → 禁言 1 天 2 小时
-/p 123456 kick f 严重违规        → 踢出并加入黑名单
-/p @某人 warn 注意言辞           → 警告
-/p 反馈组 @某人 mute 1d 测试     → 在指定配置中执行
+/punish @某人 mute 1d2h 广告刷屏     → 禁言 1 天 2 小时
+/punish 123456 kick f 严重违规        → 踢出并加入黑名单
+/punish @某人 warn 注意言辞           → 警告
+/punish 反馈组 @某人 mute 1d 测试     → 在指定配置中执行
 ```
 
 ## 权限等级
@@ -125,7 +127,7 @@ python main.py
 | 等级 | 角色 | 配置方式 | 权限 |
 | --- | --- | --- | --- |
 | 0 | 超级管理员 | `config.json` → `super_admins` | 全部指令 |
-| ≥1 | 管理员 | `/a` 指令设置 | 数字越小权限越高（受 `command.json` 中 `min_level` 限制） |
+| ≥1 | 管理员 | `/admin` 指令设置 | 数字越小权限越高（受 `command.json` 中 `min_level` 限制） |
 | -1 | 普通成员 | 默认 | 仅 `min_level: -1` 的命令 |
 
 ## 文件结构
@@ -151,11 +153,16 @@ OneBot11/
 │   ├── basic/           #   [基础功能]
 │   │   ├── help.py      #   /help 指令
 │   │   ├── config_cmd.py#   /config 多配置管理
-│   │   └── admin.py     #   /a 权限管理
-│   └── punish/          #   [punish功能]
-│       ├── punish.py    #   /p 处罚 + 黑名单入群监听
-│       ├── rp.py        #   /rp 撤销处罚
-│       └── history.py   #   /h 查询记录
+│   │   └── admin.py     #   /admin 权限管理
+│   ├── punish/          #   [处罚系统]
+│   │   ├── punish.py    #   /punish 处罚 + 黑名单入群监听
+│   │   ├── rp.py        #   /revokepunish 撤销处罚
+│   │   └── history.py   #   /history 查询记录
+│   └── verify/          #   [进群验证]（v1.0.6 新增）
+│       ├── __init__.py
+│       ├── models.py    #   数据模型（验证方案 / 审批方案）
+│       ├── verification.py  #   答题验证（多模式出题 + 答案匹配）
+│       └── approval.py  #   加群审批（正则匹配入群申请）
 ├── tools/               # 独立工具
 │   └── migrate.py       # 旧版数据迁移脚本
 ├── data/                # 运行时数据
@@ -164,9 +171,12 @@ OneBot11/
 │       ├── groups.json          # 通知群 + 执行群
 │       ├── command.json         # 命令覆盖（可选）
 │       ├── permissions.json     # 权限映射
-│       └── punish/              # 处罚子系统
-│           ├── records.json     # 处罚记录
-│           └── blacklist.json   # 黑名单
+│       ├── punish/              # 处罚子系统
+│       │   ├── records.json     # 处罚记录
+│       │   └── blacklist.json   # 黑名单
+│       ├── verify_config.json   # 验证方案（v1.0.6）
+│       ├── approval_config.json # 审批方案（v1.0.6）
+│       └── verify_groups.json   # 群验证开关（v1.0.6）
 └── logs/                # 日志文件（时间命名）
 ```
 

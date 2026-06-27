@@ -67,6 +67,8 @@ async def on_xxx(self, event: dict) -> None:
 支持的事件类型：
 - `notice.group_increase` — 群成员增加
 - `notice.group_decrease` — 群成员减少
+- `request.group_add` — 入群请求
+- `message.group` — 群消息
 - 其它 OneBot v11 事件类型可扩展
 
 ## 添加新指令 — 完整步骤
