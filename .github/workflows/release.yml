@@ -59,35 +59,15 @@ jobs:
           cat /tmp/update_log.md || echo "(empty)"
 
       - name: Generate changelog with git-cliff
-        id: changelog
-        run: |
-          # 安装 git-cliff
-          curl -sSfL \
-            "https://github.com/orhun/git-cliff/releases/download/v2.9.0/git-cliff-2.9.0-x86_64-unknown-linux-gnu.tar.gz" \
-            | tar xz
-          sudo install git-cliff-*/git-cliff /usr/local/bin/
-
-          # 确定前一个 tag
-          PREV_TAG=$(git tag --sort=-v:refname | sed -n "/^${{ github.ref_name }}$/{n;p}")
-
-          # 生成 changelog
-          if [ -n "$PREV_TAG" ]; then
-            RANGE="${PREV_TAG}..${{ github.ref_name }}"
-          else
-            RANGE=""
-          fi
-
-          git-cliff \
-            --config .github/cliff.toml \
-            --github-repo "${{ github.repository }}" \
-            --github-token "${{ secrets.GITHUB_TOKEN }}" \
-            --log-option "--first-parent" \
-            --strip header \
-            --output /tmp/changelog.md \
-            $RANGE || echo "cliff_failed=true" >> "$GITHUB_OUTPUT"
-
-          echo "Generated changelog:"
-          cat /tmp/changelog.md || echo "(empty)"
+        uses: orhun/git-cliff-action@v4
+        with:
+          config: .github/cliff.toml
+          args: >-
+            -vv --latest --strip header
+            ${{ steps.meta.outputs.prerelease == 'false' && '--tag-pattern "^v[0-9]+\\.[0-9]+\\.[0-9]+$"' || '' }}
+        env:
+          OUTPUT: CHANGES.md
+          GITHUB_REPO: ${{ github.repository }}
 
       - name: Compose final release body
         run: |
@@ -112,8 +92,8 @@ jobs:
               echo ""
             fi
 
-            if [ -s /tmp/changelog.md ]; then
-              cat /tmp/changelog.md
+            if [ -s CHANGES.md ]; then
+              cat CHANGES.md
             else
               # FALLBACK: git-cliff 失败时回退到 git log
               PREV_TAG=$(git tag --sort=-v:refname | sed -n "/^${{ github.ref_name }}$/{n;p}")
