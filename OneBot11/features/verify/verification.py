@@ -1251,8 +1251,10 @@ class VerificationModule:
 
     async def _fail_session(self, session: VerifySession, reason: str):
         """验证失败 → 踢出"""
+        if session.status != "active":
+            return  # 已被 _pass_session 或另一个 _fail_session 处理
         session.status = "failed"
-        self._cancel_timeout(session)
+        # 先从 sessions 移除，防止超时任务在此期间重复触发
         self.sessions.pop((session.group_id, session.user_id), None)
 
         await self.d.send_message(session.group_id, reason)
@@ -1267,11 +1269,17 @@ class VerificationModule:
             )
         except Exception:
             logger.exception("踢出成员失败")
+        finally:
+            # 取消超时任务必须放在最后，否则超时任务调用本函数时会取消自身
+            # → 在下一个 await 处抛出 CancelledError → kick 被跳过
+            self._cancel_timeout(session)
 
     def _cancel_timeout(self, session: VerifySession):
-        """取消超时任务"""
+        """取消超时任务（安全：不会取消当前正在执行的任务）"""
         if session.timeout_task and not session.timeout_task.done():
-            session.timeout_task.cancel()
+            current = asyncio.current_task()
+            if session.timeout_task is not current:
+                session.timeout_task.cancel()
 
     # ════════════════════════════════════════════════════════════
     # 题目构建
