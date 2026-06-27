@@ -342,39 +342,50 @@ def render_config_list(configs: list[tuple[str, str, str, int]]) -> bytes:
 
 def render_question_card(expression: str, attempts: int, max_attempts: int,
                           progress: str = "", footer: str = "") -> bytes:
-    """渲染验证题目卡片。expression 为题目文本（计算题算式或问答题文本）。"""
+    """渲染验证题目卡片。expression 为题目文本（计算题算式或问答题文本）。
+    长文本自动换行以适应卡片宽度。"""
     width, padding = 460, 24
+    text_w = width - 2 * padding  # 可用文本宽度
     font_q = _get_font(22, bold=True)
-    font_body = _get_font(17, bold=False)
     font_small = _get_font(15, bold=False)
 
-    # 预计算文本行
-    lines: list[tuple[str, object, str]] = []  # (text, font, color)
+    # ── 构建物理行（已折行）──
+    # 每项: (text, font, color)
+    phys_lines: list[tuple[str, ImageFont.FreeTypeFont, str]] = []
+
+    def _add_lines(text: str, font: ImageFont.FreeTypeFont, color: str):
+        """添加文本，自动按可用宽度折行。空文本加一个空行。"""
+        if not text:
+            phys_lines.append(("", font, color))
+            return
+        for line in _wrap_text(text, font, text_w):
+            phys_lines.append((line, font, color))
 
     if progress:
-        lines.append((progress, font_small, "#666666"))
-        lines.append(("", font_small, "#666666"))
+        _add_lines(progress, font_small, "#666666")
+        phys_lines.append(("", font_small, "#666666"))
 
-    lines.append(("📝 请回答以下题目", font_small, "#888888"))
-    lines.append(("", font_small, "#888888"))
-    lines.append((expression, font_q, "#1A237E"))
+    _add_lines("📝 请回答以下题目", font_small, "#888888")
+    phys_lines.append(("", font_small, "#888888"))
+    _add_lines(expression, font_q, "#1A237E")
 
     if footer:
-        lines.append(("", font_small, "#666666"))
-        lines.append((footer, font_small, "#666666"))
+        phys_lines.append(("", font_small, "#666666"))
+        _add_lines(footer, font_small, "#666666")
 
     # 尝试次数
     if max_attempts == -1:
         attempts_str = f"尝试次数: {attempts} / 不限"
     else:
         attempts_str = f"尝试次数: {attempts} / {max_attempts + 1}"
-    lines.append(("", font_small, "#666666"))
-    lines.append((attempts_str, font_small, "#E65100" if attempts > 0 else "#888888"))
+    phys_lines.append(("", font_small, "#666666"))
+    phys_lines.append((attempts_str, font_small,
+                       "#E65100" if attempts > 0 else "#888888"))
 
-    # 计算高度
+    # ── 计算总高度 ──
     line_heights = []
     total_h = padding
-    for text, font, _ in lines:
+    for text, font, _ in phys_lines:
         if not text:
             h = 6
         else:
@@ -393,7 +404,7 @@ def render_question_card(expression: str, attempts: int, max_attempts: int,
     draw.rectangle((0, 0, width, 4), fill="#1565C0")
 
     y = padding
-    for (text, font, color), h in zip(lines, line_heights):
+    for (text, font, color), h in zip(phys_lines, line_heights):
         if not text:
             y += h
             continue
@@ -414,13 +425,34 @@ def _truncate(text: str, font: ImageFont.FreeTypeFont, max_w: int) -> str:
     return text + "…" if text else "…"
 
 
+def _wrap_text(text: str, font: ImageFont.FreeTypeFont,
+               max_w: int) -> list[str]:
+    """将文本按可用宽度折行，返回行列表。"""
+    if not text:
+        return [""]
+    lines = []
+    current = ""
+    for ch in text:
+        test = current + ch
+        if _get_text_width(test, font) <= max_w:
+            current = test
+        else:
+            if current:
+                lines.append(current)
+            current = ch
+    if current:
+        lines.append(current)
+    return lines if lines else [""]
+
+
 # ---- 验证答题说明图片 ----
 
 def render_verify_guide() -> bytes:
-    """渲染进群验证答题说明图片。"""
-    width, height = 480, 320
-    img = Image.new("RGB", (width, height), "#FFFFFF")
-    draw = ImageDraw.Draw(img)
+    """渲染进群验证答题说明图片。长文本自动折行适应卡片宽度。"""
+    width = 480
+    padding_x = 30
+    padding_y = 20
+    text_w = width - 2 * padding_x  # 可用文本宽度
 
     font_title = _get_font(24, bold=True)
     font_body = _get_font(18, bold=False)
@@ -428,12 +460,9 @@ def render_verify_guide() -> bytes:
 
     # 标题
     title = "📋 答题说明"
-    draw.text((30, 20), title, fill="#1a1a2e", font=font_title)
 
-    # 分隔线
-    draw.line((30, 55, width - 30, 55), fill="#E0E0E0", width=1)
-
-    lines = [
+    # 逻辑行: (text, font, color)
+    logical_lines = [
         ("• 直接输入答案发送即可，无需加任何前缀", font_body, "#333333"),
         ("", font_body, "#333333"),
         ("计算题", font_title, "#16213e"),
@@ -451,12 +480,45 @@ def render_verify_guide() -> bytes:
         ("⚠ 每题有尝试次数限制，请认真作答", font_example, "#CC6600"),
     ]
 
-    y = 70
-    for text, font, color in lines:
+    # ── 折行：将每个逻辑行按可用宽度折成物理行 ──
+    phys_lines: list[tuple[str, ImageFont.FreeTypeFont, str]] = []
+    for text, font, color in logical_lines:
+        if not text:
+            phys_lines.append(("", font, color))
+        else:
+            for wrapped in _wrap_text(text, font, text_w):
+                phys_lines.append((wrapped, font, color))
+
+    # ── 计算总高度 ──
+    y = padding_y + font_title.size + 8  # 标题 + 间距
+    y += 10  # 分隔线 + 间距
+    for text, font, _ in phys_lines:
         if not text:
             y += 4
             continue
-        draw.text((30, y), text, fill=color, font=font)
+        try:
+            y += int(font.getbbox(text)[3] - font.getbbox(text)[1]) + 6
+        except AttributeError:
+            y += font.size + 6
+    height = y + padding_y
+
+    img = Image.new("RGB", (width, height), "#FFFFFF")
+    draw = ImageDraw.Draw(img)
+
+    # 标题
+    draw.text((padding_x, padding_y), title, fill="#1a1a2e", font=font_title)
+
+    # 分隔线
+    sep_y = padding_y + font_title.size + 8
+    draw.line((padding_x, sep_y, width - padding_x, sep_y), fill="#E0E0E0", width=1)
+
+    # 绘制物理行
+    y = sep_y + 10
+    for text, font, color in phys_lines:
+        if not text:
+            y += 4
+            continue
+        draw.text((padding_x, y), text, fill=color, font=font)
         try:
             y += int(font.getbbox(text)[3] - font.getbbox(text)[1]) + 6
         except AttributeError:
