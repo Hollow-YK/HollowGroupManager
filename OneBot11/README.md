@@ -174,9 +174,11 @@ OneBot11/
 │       ├── punish/              # 处罚子系统
 │       │   ├── records.json     # 处罚记录
 │       │   └── blacklist.json   # 黑名单
-│       ├── verify_config.json   # 验证方案（v1.0.6）
-│       ├── approval_config.json # 审批方案（v1.0.6）
-│       └── verify_groups.json   # 群验证开关（v1.0.6）
+│       └── verify/                      # 进群验证子系统
+│           ├── verify.json           # 验证方案
+│           ├── approval.json         # 审批方案
+│           ├── verify_groups.json    # 群验证开关
+│           └── approval_groups.json  # 群审批开关
 └── logs/                # 日志文件（时间命名）
 ```
 

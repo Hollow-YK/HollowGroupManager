@@ -55,7 +55,7 @@ class VerificationModule:
                 try:
                     self._configs[name] = VerifyConfig.model_validate(raw_cfg)
                 except Exception:
-                    logger.warning(f"[{name}] verify.json 解析失败，使用默认配置")
+                    logger.warning(f"[{name}] verify/verify.json 解析失败，使用默认配置")
                     self._configs[name] = VerifyConfig()
             else:
                 self._configs[name] = VerifyConfig()

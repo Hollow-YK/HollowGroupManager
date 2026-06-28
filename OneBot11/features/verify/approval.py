@@ -45,7 +45,7 @@ class ApprovalModule:
                 try:
                     self._configs[name] = ApprovalConfig.model_validate(raw_cfg)
                 except Exception:
-                    logger.warning(f"[{name}] approval_config.json 解析失败")
+                    logger.warning(f"[{name}] verify/approval.json 解析失败")
                     self._configs[name] = ApprovalConfig()
             else:
                 self._configs[name] = ApprovalConfig()
