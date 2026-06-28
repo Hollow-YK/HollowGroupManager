@@ -28,6 +28,26 @@ logger = logging.getLogger("Hollow.Verify")
 # 答案字符串最大长度（防止过长消息）
 _MAX_ANSWER_LEN = 200
 
+# VerifyConfig 字段映射：命令名 → (模型属性, 类型, 描述)
+# 支持 snake_case / camelCase / 旧命令别名
+_VERIFY_CONFIG_FIELDS: dict[str, tuple[str, type, str]] = {}
+
+_verify_field_specs: list[tuple[str, type, str]] = [
+    ("welcome_text",          str,  "欢迎消息文本"),
+    ("total_max_errors",      int,  "总最多出错次数 (-1=不限)"),
+    ("include_retry_in_total", bool, "重试错误是否计入总错误"),
+    ("timeout_seconds",       int,  "非Bot审批超时秒数 (0=不限)"),
+    ("bot_approved_timeout",  int,  "Bot审批超时秒数 (0=不限)"),
+]
+
+def _snake_to_camel(name: str) -> str:
+    parts = name.split("_")
+    return parts[0] + "".join(p.title() for p in parts[1:])
+
+for _attr, _typ, _desc in _verify_field_specs:
+    _VERIFY_CONFIG_FIELDS[_attr] = (_attr, _typ, _desc)
+    _VERIFY_CONFIG_FIELDS[_snake_to_camel(_attr)] = (_attr, _typ, _desc)
+
 
 class VerificationModule:
     """进群验证"""
@@ -55,7 +75,7 @@ class VerificationModule:
                 try:
                     self._configs[name] = VerifyConfig.model_validate(raw_cfg)
                 except Exception:
-                    logger.warning(f"[{name}] verify.json 解析失败，使用默认配置")
+                    logger.warning(f"[{name}] verify/verify.json 解析失败，使用默认配置")
                     self._configs[name] = VerifyConfig()
             else:
                 self._configs[name] = VerifyConfig()
@@ -145,17 +165,9 @@ class VerificationModule:
             return await self._cmd_off(sender_id, group_id, parts)
         elif sub == "status":
             return await self._cmd_status(group_id, parts)
-        # 方案设置命令
-        elif sub == "welcome":
-            return await self._cmd_welcome(group_id, parts)
-        elif sub == "maxerr":
-            return await self._cmd_maxerr(group_id, parts)
-        elif sub == "retry":
-            return await self._cmd_retry(group_id)
-        elif sub == "timeout":
-            return await self._cmd_timeout(group_id, parts)
-        elif sub == "bottimeout":
-            return await self._cmd_bottimeout(group_id, parts)
+        # 统一配置命令
+        elif sub == "config":
+            return await self._cmd_config(group_id, parts)
         # 考核块命令
         elif sub == "block":
             return await self._cmd_block(group_id, parts)
@@ -169,7 +181,7 @@ class VerificationModule:
         return (
             "用法:\n"
             "  群开关: /v <on|off|status>\n"
-            "  方案设置: /v <welcome|maxerr|retry|timeout> [...]\n"
+            "  配置: /v config [key] [value]\n"
             "  考核块: /v block <add|remove|list|move|edit> [...]\n"
             "  题目: /v question <add|remove|list|edit> [...]"
         )
@@ -242,103 +254,111 @@ class VerificationModule:
         lines = [
             f"进群验证: {state}",
             f"配置: {cfg.name}",
-            f"总出错次数: {self._fmt_val(vcfg.total_max_errors)}",
-            f"重试计入总错误: {'是' if vcfg.include_retry_in_total else '否'}",
-            f"非Bot审批超时: {self._fmt_timeout(vcfg.timeout_seconds)}",
-            f"Bot审批超时: {self._fmt_timeout(vcfg.bot_approved_timeout)}",
+            f"总出错次数 (total_max_errors): {self._fmt_val(vcfg.total_max_errors)}",
+            f"重试计入总错误 (include_retry_in_total): {'是' if vcfg.include_retry_in_total else '否'}",
+            f"非Bot审批超时 (timeout_seconds): {self._fmt_timeout(vcfg.timeout_seconds)}",
+            f"Bot审批超时 (bot_approved_timeout): {self._fmt_timeout(vcfg.bot_approved_timeout)}",
+            f"欢迎消息 (welcome_text): {vcfg.welcome_text[:50] + '...' if len(vcfg.welcome_text) > 50 else vcfg.welcome_text or '(空)'}",
             f"考核块数: {len(vcfg.blocks)}",
+            "",
+            "提示: 使用 /v config <key> <value> 修改，如 /v config total_max_errors 10",
         ]
         for i, blk in enumerate(vcfg.blocks, 1):
             q_count = len(blk.questions)
             lines.append(f"  [{i}] {blk.type.value} id={blk.id} 题目数={q_count}")
         return "\n".join(lines)
 
-    # ── 方案设置命令 ──
+    # ── 统一配置命令 ──
 
-    async def _cmd_welcome(self, group_id: str,
-                           parts: List[str]) -> Optional[str]:
-        cfg, err = self._resolve_single_config(group_id, parts)
-        if err:
-            return err
-        assert cfg is not None
-        if len(parts) < 3:
-            return "用法: /v welcome <欢迎文本>"
-        vcfg = self._configs.get(cfg.name, VerifyConfig())
-        vcfg.welcome_text = " ".join(parts[2:])
-        self._configs[cfg.name] = vcfg
-        self._save_config(cfg.name)
-        return f"欢迎消息已更新"
-
-    async def _cmd_maxerr(self, group_id: str,
+    async def _cmd_config(self, group_id: str,
                           parts: List[str]) -> Optional[str]:
-        cfg, err = self._resolve_single_config(group_id, parts)
+        """统一配置管理: /v config [key] [value]"""
+        # _resolve_single_config(start_idx=2) 在多配置群时会将 parts[2] 当作配置名消费
+        cfg, err = self._resolve_single_config(group_id, parts, start_idx=2)
         if err:
             return err
         assert cfg is not None
-        if len(parts) < 3:
-            return "用法: /v maxerr <次数 | -1=不限>"
-        try:
-            val = int(parts[2])
-        except ValueError:
-            return "请输入整数"
-        vcfg = self._configs.get(cfg.name, VerifyConfig())
-        vcfg.total_max_errors = val
-        self._configs[cfg.name] = vcfg
-        self._save_config(cfg.name)
-        return f"总出错次数已设为: {self._fmt_val(val)}"
 
-    async def _cmd_retry(self, group_id: str) -> Optional[str]:
-        cfg, err = self._resolve_single_config(group_id, [])
-        if err:
-            return err
-        assert cfg is not None
         vcfg = self._configs.get(cfg.name, VerifyConfig())
-        vcfg.include_retry_in_total = not vcfg.include_retry_in_total
-        self._configs[cfg.name] = vcfg
-        self._save_config(cfg.name)
-        state = "计入" if vcfg.include_retry_in_total else "不计入"
-        return f"重试错误{state}总错误次数"
 
-    async def _cmd_timeout(self, group_id: str,
-                           parts: List[str]) -> Optional[str]:
-        cfg, err = self._resolve_single_config(group_id, parts)
-        if err:
-            return err
-        assert cfg is not None
-        if len(parts) < 3:
-            return "用法: /v timeout <秒数 | 0=不限>"
-        try:
-            val = int(parts[2])
-            if val < 0:
-                val = 0
-        except ValueError:
-            return "请输入非负整数（秒）"
-        vcfg = self._configs.get(cfg.name, VerifyConfig())
-        vcfg.timeout_seconds = val
-        self._configs[cfg.name] = vcfg
-        self._save_config(cfg.name)
-        return f"非Bot审批超时已设为: {self._fmt_timeout(val)}"
+        # 确定 key/value 的起始位置
+        # 如果 parts[2] 恰好等于配置名（多配置群指定了配置），则 key 从 parts[3] 开始
+        key_start = 3 if (len(parts) > 2 and parts[2] == cfg.name) else 2
 
-    async def _cmd_bottimeout(self, group_id: str,
-                               parts: List[str]) -> Optional[str]:
-        """设置Bot审批成员的验证超时: /v bottimeout <秒数>"""
-        cfg, err = self._resolve_single_config(group_id, parts)
-        if err:
-            return err
-        assert cfg is not None
-        if len(parts) < 3:
-            return "用法: /v bottimeout <秒数 | 0=不限>"
+        # 无参数 → 列出所有字段
+        if len(parts) <= key_start:
+            lines = [f"验证方案配置 ({cfg.name}):"]
+            for attr, typ, desc in _verify_field_specs:
+                raw = getattr(vcfg, attr)
+                if typ is bool:
+                    display = "是" if raw else "否"
+                elif attr == "total_max_errors":
+                    display = self._fmt_val(raw)
+                elif attr in ("timeout_seconds", "bot_approved_timeout"):
+                    display = self._fmt_timeout(raw)
+                else:
+                    display = str(raw) if raw else "（空）"
+                lines.append(f"  {attr} = {display}")
+            lines.append("")
+            lines.append("修改: /v config <key> <value>")
+            lines.append("可用 key: " + ", ".join(a for a, _, _ in _verify_field_specs))
+            return "\n".join(lines)
+
+        key = parts[key_start].lower()
+        field = _VERIFY_CONFIG_FIELDS.get(key)
+        if field is None:
+            available = ", ".join(sorted(set(
+                a for a, _, _ in _verify_field_specs
+            )))
+            return f"未知配置项: {key}\n可用: {available}\n也支持 camelCase（如 totalMaxErrors）和旧命令名（如 maxerr）"
+
+        attr, typ, desc = field
+
+        # 单参数 → 获取值
+        if len(parts) <= key_start + 1:
+            raw = getattr(vcfg, attr)
+            if typ is bool:
+                display = "是" if raw else "否"
+            elif attr == "total_max_errors":
+                display = self._fmt_val(raw)
+            elif attr in ("timeout_seconds", "bot_approved_timeout"):
+                display = self._fmt_timeout(raw)
+            else:
+                display = str(raw) if raw else "（空）"
+            camel = _snake_to_camel(attr)
+            return f"{attr} ({camel}): {display}\n说明: {desc}"
+
+        # 多参数 → 设置值
+        value = " ".join(parts[key_start + 1:])
+
         try:
-            val = int(parts[2])
-            if val < 0:
-                val = 0
+            if typ is bool:
+                v = value.lower()
+                if v in ("true", "1", "yes", "是", "on"):
+                    setattr(vcfg, attr, True)
+                    display = "是"
+                elif v in ("false", "0", "no", "否", "off"):
+                    setattr(vcfg, attr, False)
+                    display = "否"
+                else:
+                    return f"请输入布尔值: true/false, 1/0, yes/no, 是/否"
+            elif typ is int:
+                setattr(vcfg, attr, int(value))
+                if attr == "total_max_errors":
+                    display = self._fmt_val(int(value))
+                elif attr in ("timeout_seconds", "bot_approved_timeout"):
+                    display = self._fmt_timeout(int(value))
+                else:
+                    display = value
+            else:
+                setattr(vcfg, attr, value)
+                display = value if value else "（空）"
         except ValueError:
-            return "请输入非负整数（秒）"
-        vcfg = self._configs.get(cfg.name, VerifyConfig())
-        vcfg.bot_approved_timeout = val
+            return f"{key} 需要数值类型"
+
         self._configs[cfg.name] = vcfg
         self._save_config(cfg.name)
-        return f"Bot审批超时已设为: {self._fmt_timeout(val)}"
+        return f"{attr} 已设为: {display}"
 
     # ── 考核块命令 ──
 

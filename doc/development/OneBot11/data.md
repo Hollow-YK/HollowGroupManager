@@ -116,9 +116,11 @@ data/
 │   ├── groups.json           # ConfigInfo
 │   ├── command.json          # 配置级命令覆盖（可选）
 │   ├── permissions.json      # {QQ号: 权限等级}
-│   ├── verify_config.json    # 进群验证方案（v1.0.6）
-│   ├── approval_config.json  # 加群审批方案（v1.0.6）
-│   ├── verify_groups.json    # 群验证开关（v1.0.6）
+│   ├── verify/                      # 进群验证子系统（v1.0.6）
+│   │   ├── verify.json           # 验证方案
+│   │   ├── approval.json         # 审批方案
+│   │   ├── verify_groups.json    # 群验证开关
+│   │   └── approval_groups.json  # 群审批开关
 │   └── punish/
 │       ├── records.json      # [PunishRecord]
 │       └── blacklist.json    # [BlacklistItem]
