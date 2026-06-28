@@ -55,9 +55,11 @@ HollowGroupManager/
 │   │       ├── punish/            # 处罚子系统
 │   │       │   ├── records.json
 │   │       │   └── blacklist.json
-│   │       ├── verify_config.json # 验证方案
-│   │       ├── approval_config.json  # 审批方案
-│   │       └── verify_groups.json    # 群验证开关
+│   │       └── verify/                      # 进群验证子系统
+│   │           ├── verify.json           # 验证方案
+│   │           ├── approval.json         # 加群审批方案
+│   │           ├── verify_groups.json    # 群验证开关
+│   │           └── approval_groups.json  # 群审批开关
 │   └── logs/                      # 日志文件（时间命名）
 ├── doc/                           # 项目文档
 │   ├── comparison.md              # 两版详细对比
@@ -124,9 +126,10 @@ QQ消息 → 框架/协议层 → 消息处理器
 | `permissions.json` | 配置根 | 权限映射（`Dict[str, int]`） |
 | `records.json` | `punish/` | 处罚记录（`PunishRecord`） |
 | `blacklist.json` | `punish/` | 黑名单（`BlacklistItem`） |
-| `verify_config.json` | 配置根 | 进群答题验证方案 |
-| `approval_config.json` | 配置根 | 加群审批方案 |
-| `verify_groups.json` | 配置根 | 群验证开关 |
+| `verify/verify.json` | `verify/` | 进群答题验证方案 |
+| `verify/approval.json` | `verify/` | 加群审批方案 |
+| `verify/verify_groups.json` | `verify/` | 群验证开关 |
+| `verify/approval_groups.json` | `verify/` | 群审批开关 |
 
 所有数据文件使用 `.tmp` 原子写入，加载失败时自动尝试 `.tmp` 恢复。
 
