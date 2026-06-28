@@ -5,7 +5,6 @@
 审批方案（ApprovalConfig）每配置一份，定义 comment 正则和拒绝原因。
 群开关（ApprovalGroupConfig）每群一个，控制是否启用审批。
 """
-import html
 import logging
 import re
 import time
@@ -20,6 +19,24 @@ logger = logging.getLogger("Hollow.Approval")
 
 # 审批记录过期时间（秒）— 超时清理避免内存泄漏
 _APPROVAL_TTL = 600  # 10 分钟
+
+# ApprovalConfig 字段映射：命令名 → (模型属性, 类型, 描述)
+_APPROVAL_CONFIG_FIELDS: dict[str, tuple[str, type, str]] = {}
+
+def _snake_to_camel(name: str) -> str:
+    parts = name.split("_")
+    return parts[0] + "".join(p.title() for p in parts[1:])
+
+_approval_field_specs: list[tuple[str, type, str]] = [
+    ("comment_regex",  str, "匹配正则（空=不校验直接同意）"),
+    ("reject_reason",  str, "拒绝原因文本"),
+    ("on_mismatch",    str, "不匹配行为: reject=拒绝, ignore=忽略"),
+    ("welcome_text",   str, "入群欢迎消息（空=不发送）"),
+]
+
+for _attr, _typ, _desc in _approval_field_specs:
+    _APPROVAL_CONFIG_FIELDS[_attr] = (_attr, _typ, _desc)
+    _APPROVAL_CONFIG_FIELDS[_snake_to_camel(_attr)] = (_attr, _typ, _desc)
 
 
 class ApprovalModule:
@@ -143,11 +160,11 @@ class ApprovalModule:
             return (
                 "用法:\n"
                 "  群开关: /ap <on|off|status>\n"
-                "  方案设置: /ap <regex|reject|mismatch|welcome> [...]\n"
-                "  /ap regex <正则>        匹配正则（空=不校验）\n"
-                "  /ap reject <文本>       拒绝原因\n"
-                "  /ap mismatch reject|ignore  不匹配时拒绝/忽略\n"
-                "  /ap welcome <文本>      入群欢迎消息（空=不发送）"
+                "  配置: /ap config [key] [value]\n"
+                "  /ap config comment_regex <正则>    匹配正则（空=不校验）\n"
+                "  /ap config reject_reason <文本>    拒绝原因\n"
+                "  /ap config on_mismatch reject|ignore  不匹配时拒绝/忽略\n"
+                "  /ap config welcome_text <文本>     入群欢迎消息（空=不发送）"
             )
 
         sub = parts[1].lower()
@@ -158,16 +175,10 @@ class ApprovalModule:
             return await self._cmd_off(sender_id, group_id, parts)
         elif sub == "status":
             return await self._cmd_status(group_id, parts)
-        elif sub == "regex":
-            return await self._cmd_regex(group_id, parts)
-        elif sub == "reject":
-            return await self._cmd_reject(group_id, parts)
-        elif sub == "mismatch":
-            return await self._cmd_mismatch(group_id, parts)
-        elif sub == "welcome":
-            return await self._cmd_welcome(group_id, parts)
+        elif sub == "config":
+            return await self._cmd_config(group_id, parts)
         else:
-            return f"未知子命令: {sub}，可选: on / off / status / regex / reject / mismatch / welcome"
+            return f"未知子命令: {sub}，可选: on / off / status / config"
 
     async def _is_group_admin(self, group_id: str, user_id: str) -> bool:
         """检查用户是否为群主或管理员"""
@@ -236,108 +247,91 @@ class ApprovalModule:
         regex_info = acfg.comment_regex if acfg.comment_regex else "（不校验，直接同意）"
         mismatch_label = "拒绝" if acfg.on_mismatch == "reject" else "忽略（交管理员审核）"
         welcome_info = acfg.welcome_text if acfg.welcome_text else "（不发送）"
+        reject_info = acfg.reject_reason if acfg.reject_reason else "（默认）"
         lines = [
             f"加群审批: {state}",
             f"配置: {cfg.name}",
-            f"匹配正则: {regex_info}",
-            f"不匹配行为: {mismatch_label}",
-            f"拒绝原因: {acfg.reject_reason}",
-            f"入群欢迎: {welcome_info}",
+            f"匹配正则 (comment_regex): {regex_info}",
+            f"不匹配行为 (on_mismatch): {mismatch_label}",
+            f"拒绝原因 (reject_reason): {reject_info}",
+            f"入群欢迎 (welcome_text): {welcome_info}",
         ]
         return "\n".join(lines)
 
-    # ── 方案设置命令 ──
+    # ── 统一配置命令 ──
 
-    async def _cmd_regex(self, group_id: str,
-                         parts: List[str]) -> Optional[str]:
-        """设置入群申请匹配正则: /ap regex <pattern>"""
-        cfg, err = self._resolve_single_config(group_id, parts)
+    async def _cmd_config(self, group_id: str,
+                          parts: List[str]) -> Optional[str]:
+        """统一配置管理: /ap config [key] [value]"""
+        cfg, err = self._resolve_single_config(group_id, parts, start_idx=2)
         if err:
             return err
         assert cfg is not None
 
-        if len(parts) < 3:
-            return "用法: /ap regex <正则表达式>  （空字符串=不校验直接同意）"
-
-        pattern = html.unescape(" ".join(parts[2:]))
         acfg = self._configs.get(cfg.name, ApprovalConfig())
 
-        # 验证正则有效性
-        if pattern:
+        # 确定 key/value 起始位置
+        key_start = 3 if (len(parts) > 2 and parts[2] == cfg.name) else 2
+
+        # 无参数 → 列出所有字段
+        if len(parts) <= key_start:
+            lines = [f"审批方案配置 ({cfg.name}):"]
+            for attr, typ, desc in _approval_field_specs:
+                raw = getattr(acfg, attr)
+                if attr == "on_mismatch":
+                    display = raw  # reject / ignore
+                else:
+                    display = raw if raw else "（空）"
+                lines.append(f"  {attr} = {display}")
+            lines.append("")
+            lines.append("修改: /ap config <key> <value>")
+            lines.append("可用 key: " + ", ".join(a for a, _, _ in _approval_field_specs))
+            return "\n".join(lines)
+
+        key = parts[key_start].lower()
+        field = _APPROVAL_CONFIG_FIELDS.get(key)
+        if field is None:
+            available = ", ".join(sorted(set(
+                a for a, _, _ in _approval_field_specs
+            )))
+            return f"未知配置项: {key}\n可用: {available}\n也支持 camelCase（如 commentRegex）和旧命令名（如 regex）"
+
+        attr, typ, desc = field
+
+        # 单参数 → 获取值
+        if len(parts) <= key_start + 1:
+            raw = getattr(acfg, attr)
+            if attr == "on_mismatch":
+                display = raw
+            else:
+                display = raw if raw else "（空）"
+            camel = _snake_to_camel(attr)
+            return f"{attr} ({camel}): {display}\n说明: {desc}"
+
+        # 多参数 → 设置值
+        value = " ".join(parts[key_start + 1:])
+
+        if attr == "on_mismatch":
+            value_lower = value.strip().lower()
+            if value_lower not in ("reject", "ignore"):
+                return "on_mismatch 只能设为: reject 或 ignore"
+            acfg.on_mismatch = value_lower
+            display = value_lower
+        else:
+            acfg.__setattr__(attr, value)
+            display = value if value else "（空）"
+
+        # on_mismatch regex 额外验证
+        if attr == "comment_regex" and value:
+            import re as _re
             try:
-                re.compile(pattern)
-            except re.error as e:
+                _re.compile(value)
+            except _re.error as e:
                 return f"正则表达式无效: {e}"
 
-        acfg.comment_regex = pattern
         self._configs[cfg.name] = acfg
         self._save_config(cfg.name)
-        logger.info(f"审批正则已更新: config={cfg.name} regex={pattern!r}")
-
-        if pattern:
-            return f"审批正则已设置: {pattern}"
-        else:
-            return "审批正则已清除（将直接同意所有入群申请）"
-
-    async def _cmd_reject(self, group_id: str,
-                          parts: List[str]) -> Optional[str]:
-        """设置拒绝原因: /ap reject <message>"""
-        cfg, err = self._resolve_single_config(group_id, parts)
-        if err:
-            return err
-        assert cfg is not None
-
-        if len(parts) < 3:
-            return "用法: /ap reject <拒绝原因文本>"
-
-        reason = " ".join(parts[2:])
-        acfg = self._configs.get(cfg.name, ApprovalConfig())
-        acfg.reject_reason = reason
-        self._configs[cfg.name] = acfg
-        self._save_config(cfg.name)
-        return f"拒绝原因已设置: {reason}"
-
-    async def _cmd_mismatch(self, group_id: str,
-                            parts: List[str]) -> Optional[str]:
-        """设置不匹配行为: /ap mismatch <reject|ignore>"""
-        cfg, err = self._resolve_single_config(group_id, parts)
-        if err:
-            return err
-        assert cfg is not None
-
-        if len(parts) < 3 or parts[2].lower() not in ("reject", "ignore"):
-            return "用法: /ap mismatch <reject|ignore>\n  reject=不匹配时拒绝  ignore=不匹配时忽略（交管理员审核）"
-
-        mode = parts[2].lower()
-        acfg = self._configs.get(cfg.name, ApprovalConfig())
-        acfg.on_mismatch = mode
-        self._configs[cfg.name] = acfg
-        self._save_config(cfg.name)
-
-        label = "拒绝" if mode == "reject" else "忽略（交管理员审核）"
-        return f"不匹配行为已设为: {label}"
-
-    async def _cmd_welcome(self, group_id: str,
-                           parts: List[str]) -> Optional[str]:
-        """设置入群欢迎文本: /ap welcome <text>"""
-        cfg, err = self._resolve_single_config(group_id, parts)
-        if err:
-            return err
-        assert cfg is not None
-
-        if len(parts) < 3:
-            return "用法: /ap welcome <欢迎文本>  （空字符串=不发送）\n占位符: {@新成员} → @新成员"
-
-        text = " ".join(parts[2:])
-        acfg = self._configs.get(cfg.name, ApprovalConfig())
-        acfg.welcome_text = text
-        self._configs[cfg.name] = acfg
-        self._save_config(cfg.name)
-
-        if text:
-            return f"入群欢迎已设置: {text}"
-        else:
-            return "入群欢迎已清除"
+        return f"{attr} 已设为: {display}"
 
     # ════════════════════════════════════════════════════════════
     # 事件处理

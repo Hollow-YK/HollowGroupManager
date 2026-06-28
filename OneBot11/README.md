@@ -108,8 +108,8 @@ python main.py
 | `/punish` | 1 | `[唤醒词]punish [配置] <QQ用户> <方式> [内容] <原因>` | 处罚：`kick [f]` / `mute 时长` / `warn` |
 | `/revokepunish` | 1 | `[唤醒词]revokepunish [配置] <记录ID> [撤销原因]` | 撤销处罚（多配置群必填配置名） |
 | `/history` | 1 | `[唤醒词]history [配置] [QQ用户] [-i]` | 查询：无参=表格 / 有参=汇总 / `-i`=详情 |
-| `/verify` | 0 | `[唤醒词]verify <子命令>` | 进群答题验证：on / off / status / welcome / block / question 等 |
-| `/approval` | 0 | `[唤醒词]approval <子命令>` | 加群审批：on / off / status / regex / reject / mismatch / welcome |
+| `/verify` | 0 | `[唤醒词]verify <子命令>` | 进群答题验证：on / off / status / config / block / question |
+| `/approval` | 0 | `[唤醒词]approval <子命令>` | 加群审批：on / off / status / config |
 
 禁言时长：纯数字=天，支持 `1d2h30m`、`3h`、`30m` 等组合格式。各命令的启用、名称、权限要求可在 `data/command.json`（全局）和各配置的 `command.json` 中自定义。
 
