@@ -1330,66 +1330,109 @@ class VerificationModule:
     # ════════════════════════════════════════════════════════════
 
     def _generate_calc(self, q: Question) -> tuple:
-        """生成计算题算式和答案。返回 (expression, answer)。"""
-        # 从正则推导步数
+        """生成计算题算式和答案。返回 (expression, answer)。
+
+        生成流程：
+        1. 从 stepRegex 确定总步数（运算次数）
+        2. 若 square=True，从中随机分配若干步为平方运算
+        3. 剩余步数为二元运算（加减乘除）
+        4. 生成对应数量的数字（平方位用 squareNumRegex/numRegex，普通位用 numRegex）
+        5. 随机生成二元运算符
+        6. 交错拼接数字与运算符，平方位显示 "N^2"
+        7. 按标准优先级（先乘除后加减）求值
+        """
+        # ── 1. 总步数 ──
         step_count = self._random_from_regex(q.step_regex, 1, 100)
 
-        # 收集可用二元运算符（square 单独处理）
-        bin_ops = []
+        # ── 2. 收集可用二元运算符 ──
+        bin_ops: list[str] = []
         if q.add_sub:
             bin_ops.extend(["+", "-"])
         if q.mul_div:
             bin_ops.extend(["*", "/"])
 
+        # 保底：没有任何运算可用
         if not bin_ops and not q.square:
             return "1 + 1 = ?", "2"
 
-        # 生成初始数字，分开展示值和运算值（平方仅影响运算值）
-        # 若设置了 square_num_regex，平方底数使用专用正则
-        first_regex = (q.square_num_regex if q.square and q.square_num_regex
-                       else q.num_regex)
-        display_first = self._random_from_regex(first_regex, 1, 10**9)
-        value_first = display_first * display_first if q.square else display_first
-        remaining = max(step_count - 1, 0) if q.square else step_count
-        ops: list[tuple[str, int]] = []  # [(op, num), ...]
+        # ── 3. 分配平方步数 ──
+        # 约束：square_count ≤ number_count = bin_count + 1 = step_count - square_count + 1
+        #   → square_count ≤ (step_count + 1) // 2
+        if q.square and step_count > 0:
+            max_sq = (step_count + 1) // 2
+            square_count = random.randint(0, max_sq)
+        else:
+            square_count = 0
 
-        for _ in range(remaining):
-            if not bin_ops:
-                break
-            op = random.choice(bin_ops)
-            num = self._random_from_regex(q.num_regex, 0, 10**9)
-            if op == "/" and num == 0:
-                num = 1
-            ops.append((op, num))
+        bin_count = step_count - square_count          # 二元运算符数
+        number_count = bin_count + 1                    # 总数字位数
 
-        # ── 构建表达式（标准数学写法，不需括号） ──
-        expr = str(display_first)
-        if q.square:
-            expr += "^2"
-        for op, num in ops:
-            expr += f" {op} {num}"
-        expression = expr + " = ?"
+        # 若无二元运算符可用，将 square 之外的多余步数砍掉
+        if not bin_ops:
+            if square_count > 0:
+                bin_count = 0
+                number_count = 1
+                square_count = min(square_count, 1)
+            else:
+                # square 也没分配到 → 保底
+                return "1 + 1 = ?", "2"
 
-        # ── 求值：和括号一致的优先级（先 */ 后 +-，同优先级左到右） ──
-        # 用 tokens 列表求值
-        tokens: list = [value_first]
-        for op, num in ops:
+        # ── 4. 挑选哪些位置是平方 ──
+        square_positions: set[int] = set()
+        if square_count > 0:
+            square_positions = set(random.sample(
+                range(number_count), square_count))
+
+        # ── 5. 生成各位置的数字（展示值 + 运算值） ──
+        sq_regex = q.square_num_regex or q.num_regex
+        values: list[int] = []       # 参与运算的实际数值
+        displays: list[str] = []     # 展示用的字符串
+
+        for i in range(number_count):
+            if i in square_positions:
+                base = self._random_from_regex(sq_regex, 1, 10**9)
+                values.append(base * base)
+                displays.append(f"{base}^2")
+            else:
+                num = self._random_from_regex(q.num_regex, 0, 10**9)
+                values.append(num)
+                displays.append(str(num))
+
+        # ── 6. 生成二元运算符 ──
+        operators: list[str] = []
+        for _ in range(bin_count):
+            op = random.choice(bin_ops) if bin_ops else "+"
+            operators.append(op)
+
+        # ── 7. 拼接表达式 ──
+        expr_parts = [displays[0]]
+        for i, op in enumerate(operators):
+            expr_parts.append(op)
+            expr_parts.append(displays[i + 1])
+        expression = " ".join(expr_parts) + " = ?"
+
+        # ── 8. 求值（先 */ 后 +-，左结合，整除） ──
+        tokens: list = [values[0]]
+        for i, op in enumerate(operators):
             tokens.append(op)
-            tokens.append(num)
+            tokens.append(values[i + 1])
 
-        # 第一遍：处理所有 */
+        # 第一遍：* /
         ti = 1
         while ti < len(tokens):
             if tokens[ti] in ("*", "/"):
                 left = tokens[ti - 1]
                 right = tokens[ti + 1]
-                tokens[ti - 1] = left * right if tokens[ti] == "*" else (left // right if right != 0 else left)
+                if tokens[ti] == "*":
+                    tokens[ti - 1] = left * right
+                else:
+                    tokens[ti - 1] = left // right if right != 0 else left
                 tokens.pop(ti)
                 tokens.pop(ti)
             else:
                 ti += 2
 
-        # 第二遍：处理所有 +-
+        # 第二遍：+ -
         ti = 1
         while ti < len(tokens):
             if tokens[ti] in ("+", "-"):
