@@ -56,6 +56,11 @@ python main.py
     "log_to_file": true,
     "log_level": "INFO",
     "log_dir": "logs"
+  },
+  "debug": {
+    "enabled": false,
+    "http_port": 8765,
+    "data_dir": "data/test"
   }
 }
 ```
@@ -74,6 +79,9 @@ python main.py
 | `log.log_to_file` | 是否输出日志到文件（`true` / `false`） |
 | `log.log_level` | 日志等级：`DEBUG` / `INFO` / `WARNING` / `ERROR` |
 | `log.log_dir` | 日志目录，默认 `logs`，每次启动生成 `YYYY-MM-DD_HH-MM-SS.log` |
+| `debug.enabled` | 启用调试模式（`true` / `false`，默认 `false`） |
+| `debug.http_port` | 调试 HTTP 端口（默认 `8765`，仅 `127.0.0.1`） |
+| `debug.data_dir` | 调试模式使用的测试数据目录（默认 `data/test`） |
 
 ### 4. 通信模式
 
@@ -95,6 +103,67 @@ python main.py
 ```
 
 在目标群发送 `/config new 配置名称` 创建配置，`/help` 查看所有指令。
+
+### 6. 调试模式
+
+设置 `debug.enabled: true` 后启动 Bot，将进入**离线调试模式**——不连接真实 OneBot 服务端，通过模拟事件注入来验证代码逻辑。
+
+**CLI 交互式 REPL**（当前终端直接操作）：
+
+```text
+debug> msg group=123456 user=789012 text="ghelp"    # 模拟群消息
+debug> notice group_increase group=123456 user=10003 # 模拟加群通知
+debug> request group add group=123456 user=10003 comment="答案"  # 模拟加群请求
+debug> members group=123456 set 10001:Admin 10002:Member        # 预设群成员
+debug> run debug/examples/smoke_test.json          # 运行批量测试
+debug> help                                         # 查看所有命令
+debug> quit                                         # 退出
+```
+
+**HTTP 调试端点**（`127.0.0.1:8765`，适合脚本/集成测试）：
+
+```bash
+# 注入消息事件
+curl -X POST http://127.0.0.1:8765/debug/message \
+  -H "Content-Type: application/json" \
+  -d '{"group_id":123456,"user_id":10001,"raw_message":"ghelp"}'
+
+# 预置群成员
+curl -X POST http://127.0.0.1:8765/debug/members \
+  -H "Content-Type: application/json" \
+  -d '{"group_id":123456,"members":[{"user_id":111,"nickname":"Alice"}]}'
+```
+
+| 端点 | 方法 | 说明 |
+| --- | --- | --- |
+| `/debug/event` | POST | 注入原始 OneBot 事件 JSON |
+| `/debug/message` | POST | 便捷消息注入 |
+| `/debug/members` | POST | 预置群成员（供 `get_group_member_list` 返回） |
+| `/debug/run` | POST | 运行 JSON 测试文件 |
+| `/debug/health` | GET | 健康检查 |
+
+**JSON 批量测试**（`debug/examples/smoke_test.json`）：
+
+```json
+{
+  "name": "冒烟测试",
+  "setup": {
+    "super_admins": ["10001"],
+    "members": {"123456": [{"user_id": 10001, "nickname": "Admin"}]}
+  },
+  "scenarios": [
+    {
+      "name": "help 命令正常响应",
+      "event": {"post_type": "message", "message_type": "group", "group_id": 123456, "user_id": 10001, "raw_message": "ghelp"},
+      "assert": {"reply_contains": "帮助", "no_error": true}
+    }
+  ]
+}
+```
+
+支持的断言：`reply_contains`、`reply_not_contains`、`api_count`（`==` / `>=` / `<=`）、`api_actions_include`、`api_actions_exclude`、`no_error`。
+
+> `debug.enabled: false`（默认）时调试接口完全不启动，Bot 正常工作。
 
 ## 指令参考
 
@@ -165,6 +234,13 @@ OneBot11/
 │       └── approval.py  #   加群审批（正则匹配入群申请）
 ├── tools/               # 独立工具
 │   └── migrate.py       # 旧版数据迁移脚本
+├── debug/               # 调试工具（模拟事件注入）
+│   ├── __init__.py      # DebugManager + DebugAPI 核心引擎
+│   ├── cli.py           # CLI 交互式 REPL
+│   ├── http_server.py   # HTTP 调试端点
+│   ├── runner.py        # JSON 批量测试运行器
+│   └── examples/        # 示例测试文件
+│       └── smoke_test.json
 ├── data/                # 运行时数据
 │   ├── command.json     # 全局命令配置（默认值）
 │   └── <配置名>/         # 各配置独立目录

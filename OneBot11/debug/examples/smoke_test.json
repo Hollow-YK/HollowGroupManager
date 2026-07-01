@@ -1,0 +1,90 @@
+{
+  "name": "冒烟测试 — 基本命令验证",
+  "description": "验证核心命令能否正确响应，无需真实 OneBot 服务端。",
+  "setup": {
+    "super_admins": ["10001"],
+    "members": {
+      "123456": [
+        {"user_id": 10001, "nickname": "超级管理员", "card": "Admin"},
+        {"user_id": 10002, "nickname": "普通成员", "card": "Member"}
+      ]
+    }
+  },
+  "scenarios": [
+    {
+      "name": "help 命令 — 超级管理员",
+      "event": {
+        "post_type": "message",
+        "message_type": "group",
+        "group_id": 123456,
+        "user_id": 10001,
+        "raw_message": "ghelp",
+        "message": "ghelp",
+        "sender": {"user_id": 10001, "nickname": "超级管理员", "card": "Admin"}
+      },
+      "assert": {
+        "no_error": true,
+        "api_actions_include": "send_group_msg"
+      }
+    },
+    {
+      "name": "help 命令 — 无唤醒词不触发",
+      "event": {
+        "post_type": "message",
+        "message_type": "group",
+        "group_id": 123456,
+        "user_id": 10002,
+        "raw_message": "你好",
+        "message": "你好",
+        "sender": {"user_id": 10002, "nickname": "普通成员", "card": "Member"}
+      },
+      "assert": {
+        "no_error": true,
+        "api_count": 0
+      }
+    },
+    {
+      "name": "help 命令 — 未知命令不响应",
+      "event": {
+        "post_type": "message",
+        "message_type": "group",
+        "group_id": 123456,
+        "user_id": 10001,
+        "raw_message": "gunknown_cmd_xyz",
+        "message": "gunknown_cmd_xyz",
+        "sender": {"user_id": 10001, "nickname": "超级管理员", "card": "Admin"}
+      },
+      "assert": {
+        "no_error": true,
+        "api_count": 0
+      }
+    },
+    {
+      "name": "notice 事件 — 正常分发",
+      "event": {
+        "post_type": "notice",
+        "notice_type": "group_increase",
+        "group_id": 123456,
+        "user_id": 10003
+      },
+      "assert": {
+        "no_error": true
+      }
+    },
+    {
+      "name": "request 事件 — 正常分发",
+      "event": {
+        "post_type": "request",
+        "request_type": "group",
+        "sub_type": "add",
+        "group_id": 123456,
+        "user_id": 10003,
+        "comment": "测试加群",
+        "flag": "test_flag_001"
+      },
+      "assert": {
+        "no_error": true
+      }
+    }
+  ]
+}
