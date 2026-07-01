@@ -1345,7 +1345,10 @@ class VerificationModule:
             return "1 + 1 = ?", "2"
 
         # 生成初始数字，分开展示值和运算值（平方仅影响运算值）
-        display_first = self._random_from_regex(q.num_regex, 1, 100)
+        # 若设置了 square_num_regex，平方底数使用专用正则
+        first_regex = (q.square_num_regex if q.square and q.square_num_regex
+                       else q.num_regex)
+        display_first = self._random_from_regex(first_regex, 1, 100)
         value_first = display_first * display_first if q.square else display_first
         remaining = max(step_count - 1, 0) if q.square else step_count
         ops: list[tuple[str, int]] = []  # [(op, num), ...]
