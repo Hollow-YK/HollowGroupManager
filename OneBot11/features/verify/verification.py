@@ -1332,7 +1332,7 @@ class VerificationModule:
     def _generate_calc(self, q: Question) -> tuple:
         """生成计算题算式和答案。返回 (expression, answer)。"""
         # 从正则推导步数
-        step_count = self._random_from_regex(q.step_regex, 1, 3)
+        step_count = self._random_from_regex(q.step_regex, 1, 100)
 
         # 收集可用二元运算符（square 单独处理）
         bin_ops = []
@@ -1348,7 +1348,7 @@ class VerificationModule:
         # 若设置了 square_num_regex，平方底数使用专用正则
         first_regex = (q.square_num_regex if q.square and q.square_num_regex
                        else q.num_regex)
-        display_first = self._random_from_regex(first_regex, 1, 100)
+        display_first = self._random_from_regex(first_regex, 1, 10**9)
         value_first = display_first * display_first if q.square else display_first
         remaining = max(step_count - 1, 0) if q.square else step_count
         ops: list[tuple[str, int]] = []  # [(op, num), ...]
@@ -1357,7 +1357,7 @@ class VerificationModule:
             if not bin_ops:
                 break
             op = random.choice(bin_ops)
-            num = self._random_from_regex(q.num_regex, 1, 100)
+            num = self._random_from_regex(q.num_regex, 0, 10**9)
             if op == "/" and num == 0:
                 num = 1
             ops.append((op, num))
