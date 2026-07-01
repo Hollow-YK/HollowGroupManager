@@ -1338,7 +1338,7 @@ class VerificationModule:
         3. 剩余步数为二元运算（加减乘除）
         4. 生成对应数量的数字（平方位用 squareNumRegex/numRegex，普通位用 numRegex）
         5. 随机生成二元运算符
-        6. 交错拼接数字与运算符，平方位显示 "N^2"
+        6. 交错拼接数字与运算符，平方位显示 "N²"，多平方时加括号
         7. 按标准优先级（先乘除后加减）求值
         """
         # ── 1. 总步数 ──
@@ -1387,16 +1387,25 @@ class VerificationModule:
         sq_regex = q.square_num_regex or q.num_regex
         values: list[int] = []       # 参与运算的实际数值
         displays: list[str] = []     # 展示用的字符串
+        is_square: list[bool] = []   # 标记是否为平方位
 
         for i in range(number_count):
             if i in square_positions:
                 base = self._random_from_regex(sq_regex, 1, 10**9)
                 values.append(base * base)
-                displays.append(f"{base}^2")
+                displays.append(f"{base}\u00b2")   # Unicode 角标 ²
+                is_square.append(True)
             else:
                 num = self._random_from_regex(q.num_regex, 0, 10**9)
                 values.append(num)
                 displays.append(str(num))
+                is_square.append(False)
+
+        # 多平方时用括号标明运算顺序，避免歧义（如 (3²)×(5²) 不会误读为 3²5²）
+        if square_count >= 2:
+            for idx in range(number_count):
+                if is_square[idx]:
+                    displays[idx] = f"({displays[idx]})"
 
         # ── 6. 生成二元运算符 ──
         operators: list[str] = []
