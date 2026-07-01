@@ -46,6 +46,12 @@ HollowGroupManager/
 │   │       └── approval.py        #   加群审批
 │   ├── tools/                     # 独立工具
 │   │   └── migrate.py             # 旧版数据迁移
+│   ├── debug/                     # 调试工具（模拟事件注入）
+│   │   ├── __init__.py            # DebugManager + DebugAPI 核心引擎
+│   │   ├── cli.py                 # CLI 交互式 REPL
+│   │   ├── http_server.py         # HTTP 调试端点
+│   │   ├── runner.py              # JSON 批量测试运行器
+│   │   └── examples/              # 示例测试文件
 │   ├── data/                      # 运行时数据
 │   │   ├── command.json           # 全局命令配置
 │   │   └── <配置名>/              # 各配置独立目录
