@@ -23,5 +23,6 @@
   "markdownlint.files": {
     "**/*.md": true,
     "**/*.markdown": true
-  }
+  },
+  "python-envs.defaultEnvManager": "ms-python.python:venv"
 }

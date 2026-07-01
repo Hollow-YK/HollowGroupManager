@@ -94,6 +94,11 @@ def load_config(path: str = "config.json") -> dict:
                 "data_dir": "data",
             },
             "render": {"enabled": True},
+            "debug": {
+                "enabled": False,
+                "http_port": 8765,
+                "data_dir": "data/test",
+            },
             "log": {
                 "log_to_file": True,
                 "log_level": "INFO",
@@ -192,6 +197,32 @@ async def main():
 
     # ---- 启动 ----
     tasks = []
+
+    # 调试接口（CLI + HTTP）
+    debug_cfg = cfg.get("debug", {})
+    if debug_cfg.get("enabled", False):
+        from debug.cli import run_cli
+        from debug.http_server import start_http_server
+
+        http_port = debug_cfg.get("http_port", 8765)
+        tasks.append(asyncio.create_task(
+            start_http_server(http_port, dispatcher, dm, cfg)))
+
+        logger.info(f"HollowGroupManager 已就绪 (调试模式) "
+                     f"HTTP→127.0.0.1:{http_port}, CLI→当前终端")
+
+        try:
+            await run_cli(dispatcher, dm, cfg)
+        except KeyboardInterrupt:
+            logger.info("收到中断信号")
+        finally:
+            for t in tasks:
+                t.cancel()
+            await ws.stop()
+            dispatcher.save()
+            logger.info("数据已保存，退出。")
+        return
+
     if mode in ("http_ws", "ws"):
         tasks.append(asyncio.create_task(ws.connect(ws_url)))
     if mode in ("ws_reverse", "http_ws_reverse"):
