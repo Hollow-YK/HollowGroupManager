@@ -9,10 +9,16 @@ import logging
 import random
 import re
 import secrets
-import time
-from typing import Optional, List, Dict, TYPE_CHECKING
+from typing import Optional, List, TYPE_CHECKING
 
 from features.render import render_verify_guide, render_question_card
+from core.message import (
+    at_segment,
+    image_segment,
+    message_from_event,
+    text_segment,
+    to_plain_text,
+)
 
 from .models import (
     Block, BlockType, Question, VerifyConfig, VerifyGroupConfig,
@@ -855,32 +861,22 @@ class VerificationModule:
         parts = welcome.split("{@新成员}")
         for i, part in enumerate(parts):
             if i > 0:
-                msg_segments.append({
-                    "type": "at",
-                    "data": {"qq": str(user_id)},
-                })
+                msg_segments.append(at_segment(user_id))
             # 替换其他占位符
             part = part.replace("{总最多出错数}", total_label)
             if part:
-                msg_segments.append({
-                    "type": "text",
-                    "data": {"text": part},
-                })
+                msg_segments.append(text_segment(part))
 
         # 2. 超时提示
         if timeout > 0:
-            msg_segments.append({
-                "type": "text",
-                "data": {"text": f"\n请在 {timeout} 秒内完成验证"},
-            })
+            msg_segments.append(text_segment(f"\n请在 {timeout} 秒内完成验证"))
 
         # 3. 答题说明图
         png = self.d._render_png(render_verify_guide)
         if png:
-            msg_segments.append({
-                "type": "image",
-                "data": {"file": f"base64://{base64.b64encode(png).decode()}"},
-            })
+            msg_segments.append(
+                image_segment(f"base64://{base64.b64encode(png).decode()}")
+            )
 
         await self.d.send_message(group_id, msg_segments)
 
@@ -905,7 +901,8 @@ class VerificationModule:
 
         group_id = event.get("group_id", 0)
         user_id = event.get("user_id", 0)
-        raw = event.get("raw_message", event.get("message", "")).strip()
+        # 只取文本段：真正的 at / 图片等段不会混入答案
+        raw = to_plain_text(message_from_event(event)).strip()
 
         key = (int(group_id), int(user_id))
         session = self.sessions.get(key)
@@ -1296,10 +1293,10 @@ class VerificationModule:
 
     def _cancel_timeout(self, session: VerifySession):
         """取消超时任务（安全：不会取消当前正在执行的任务）"""
-        if session.timeout_task and not session.timeout_task.done():
-            current = asyncio.current_task()
-            if session.timeout_task is not current:
-                session.timeout_task.cancel()
+        task = session.timeout_task
+        if task is not None and not task.done():
+            if task is not asyncio.current_task():
+                task.cancel()
 
     # ════════════════════════════════════════════════════════════
     # 题目构建

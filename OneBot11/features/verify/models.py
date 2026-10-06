@@ -1,6 +1,7 @@
 """
 数据模型 — Pydantic BaseModel + dataclass
 """
+import asyncio
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Optional, List
@@ -146,5 +147,5 @@ class VerifySession:
     current_block_idx: int = 0
     total_errors: int = 0
     status: str = "active"                  # active | passed | failed
-    timeout_task: Optional[object] = None   # asyncio.Task | None
+    timeout_task: Optional[asyncio.Task] = None   # 超时踢出任务
     bot_approved: bool = False              # 是否由 Bot 审批入群
