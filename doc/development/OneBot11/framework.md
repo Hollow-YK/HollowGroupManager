@@ -131,8 +131,10 @@ def register_event(self, event_type: str, handler: EventListener) -> None
 
 处理器签名：
 ```python
-# 指令处理器: (level, sender_id, group_id, parts, at_list, sender_card) -> str | None
-CmdHandler = Callable[[int, str, str, list, list, str], Awaitable[Optional[str]]]
+# 指令处理器: (level, sender_id, group_id, parts, at_list, sender_card) -> 回复
+#   回复：str = 纯文本（自动转 text 段）｜list[dict] = 消息段数组｜None = 不回复
+CmdHandler = Callable[[int, str, str, list, list, str],
+                      Awaitable[Optional[str | list[dict]]]]
 
 # 事件监听器: (event_dict) -> None
 EventListener = Callable[[dict], Awaitable[None]]
@@ -146,7 +148,9 @@ EventListener = Callable[[dict], Awaitable[None]]
 
 ```python
 # 消息发送
-async def send_message(self, group_id: int, text: str) -> bool
+async def send_message(self, group_id: int,
+                       message: str | list[dict]) -> bool
+    # str = 纯文本（包成 text 段）；list[dict] = 段数组，直接下发
 async def send_image(self, group_id: int, png_bytes: bytes) -> bool
 
 # 管理操作
@@ -189,13 +193,67 @@ def _resolve_target(self, at_list: List[str], text: str) -> Optional[str]
 ```
 handle_message(event)
   ├── 检查 message_type == "group"
+  ├── message_from_event(event) → 段数组（转义已还原）
+  ├── to_readable_string(message) → 命令解析用的 raw 文本
   ├── 唤醒词匹配（遍历 wake_words）
   ├── 计算权限等级 _level(sender_id)
+  ├── get_at_list(message) → at_list
   ├── 解析命令名（外部名 → 内部名，通过 _cmd_map）
   ├── 查注册表 _commands[internal]
   ├── 检查命令启用 + 权限
   └── 调用 handler(level, sender_id, group_id, parts, at_list, sender_card)
 ```
+
+### 消息段层 — core/message.py
+
+框架内部统一用 OneBot v11 **消息段数组**表示消息，文本与 CQ 码在类型上分离：
+
+```python
+{"type": "text",  "data": {"text": "你好"}}
+{"type": "at",    "data": {"qq": "123"}}
+{"type": "image", "data": {"file": "base64://..."}}
+```
+
+只在边界转换，中间层永远是**未转义原文**：
+
+| 方向 | 转换 |
+| --- | --- |
+| 收到 | `message_from_event(event)` → 段数组（优先 `message` 段数组，回退 `raw_message`） |
+| 发出 | 段数组直接下发；`send_message(str)` 自动包成 text 段 |
+
+常用函数：
+
+```python
+# 构造
+text_segment(text) / at_segment(qq) / image_segment(file) / to_segments(text)
+
+# 解析
+parse_cq_string(raw)        # CQ 字符串 → 段数组
+normalize_message(message)  # str / 段数组 / 单段 → 段数组（规范形式：合并相邻 text）
+message_from_event(event)   # 从事件取消息
+
+# 视图 / 序列化
+to_plain_text(message)      # 只保留文本段
+to_readable_string(message) # 文本段原文 + CQ 段还原为 CQ 码 — 有损
+to_cq_string(message)       # 段数组 → CQ 字符串（文本转义）— 无损
+get_at_list(message)        # 被 at 的 QQ 列表
+```
+
+段数组是唯一内部表示，三个视图按是否丢信息选择：
+
+| 视图 | 文本段 | CQ 段 | 无损 | 用途 |
+| --- | --- | --- | --- | --- |
+| （段数组本身） | 原文 | 独立段 | 是 | 区分文本 / CQ 时直接用 |
+| `to_plain_text` | 原文 | 丢弃 | 丢 CQ | 正则匹配、答案比对 |
+| `to_readable_string` | 原文 | CQ 码 | **否** | 切分命令参数、日志 |
+| `to_cq_string` | 转义 | CQ 码 | 是 | 无 raw 时合成、规范化比对 |
+
+注意 `to_readable_string` 是**有损**的：字面文本 `[CQ:at,qq=1]` 与真正的 at 段
+渲染结果相同。因此 **@ 一律用 `at_list`**，不要从字符串里解析 CQ 语法。
+段数组格式下 text 段是字面量，天然免疫 CQ 注入。
+
+转义细节（`core/text.py`）：纯文本转义 `&` `[` `]`；CQ 参数值额外转义 `,` → `&#44;`。
+两者都是单次扫描，避免 `&amp;#91;` 被二次反转义。
 
 ### 数据操作服务
 

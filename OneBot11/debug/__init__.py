@@ -22,16 +22,15 @@ Copyright (C) 2026  Hollow-YK  |  License: GNU AGPL v3
 """
 from __future__ import annotations
 
-import asyncio
 import logging
 import time
 from dataclasses import dataclass, field
-from pathlib import Path
-from typing import Any, Optional, Callable, Awaitable
+from typing import Any, Optional
 
 from bot.handler import EventHandler
 from core.data_manager import DataManager
 from core.dispatcher import CommandDispatcher
+from core.message import normalize_message, to_readable_string
 
 # 功能模块
 from features.basic.help import HelpModule
@@ -111,8 +110,16 @@ class DebugAPI:
 
     async def send_group_msg(self, group_id: int, message) -> Optional[int]:
         """发送群聊消息。message 为 str 或 list[dict]."""
-        msg_repr = message if isinstance(message, str) else f"[{len(message)} segments]"
-        self._record("send_group_msg", {"group_id": group_id, "message": msg_repr},
+        if isinstance(message, str):
+            params = {"group_id": group_id, "message": message}
+        else:
+            # 段数组：message 存可读文本便于断言，另存原始 segments
+            params = {
+                "group_id": group_id,
+                "message": to_readable_string(message)[:500],
+                "segments": message,
+            }
+        self._record("send_group_msg", params,
                      {"message_id": 100000 + len(self.calls)})
         return 100000 + len(self.calls)
 
@@ -301,11 +308,14 @@ class DebugManager:
                               sender_card: str = "",
                               at_list: list[str] | None = None,
                               message_id: int = 1) -> DebugResult:
-        """便捷方法：构造并注入一条群消息事件。"""
-        message = raw_message
+        """便捷方法：构造并注入一条群消息事件。
+
+        at 以 CQ 码拼进 `raw_message`（同真实服务端），`message` 设为等价段数组。
+        """
+        raw = raw_message
         if at_list:
             for qq in at_list:
-                message = f"[CQ:at,qq={qq}] " + message
+                raw = f"[CQ:at,qq={qq}] " + raw
 
         event = {
             "post_type": "message",
@@ -314,8 +324,8 @@ class DebugManager:
             "message_id": message_id,
             "group_id": group_id,
             "user_id": user_id,
-            "raw_message": raw_message,
-            "message": message,
+            "raw_message": raw,
+            "message": normalize_message(raw),
             "sender": {
                 "user_id": user_id,
                 "nickname": f"user_{user_id}",

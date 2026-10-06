@@ -29,6 +29,8 @@ main.py                    # 入口：加载配置，初始化 dispatcher，注�
   ├── core/                # [框架] 基础设施
   │   ├── dispatcher.py   #   注册接口 + 统一 API + 分发核心
   │   ├── models.py        #   Pydantic 数据模型 + ConfigState
+  │   ├── message.py       #   消息段模型（文本 / CQ 码分离）
+  │   ├── text.py          #   CQ 转义 / 反转义
   │   └── data_manager.py  #   JSON 持久化
   └── features/            # [功能] 业务功能（只依赖 dispatcher）
       ├── render.py        #   Pillow 图片渲染

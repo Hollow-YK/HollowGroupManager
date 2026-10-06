@@ -34,6 +34,7 @@ class DebugAPI:
         self._muted: dict[int, list[dict]] = {}    # 模拟禁言成员
 
     # 消息发送 → 记录并返回模拟 message_id
+    # str 原样记录；段数组记为可读文本，另存原始段数组于 params["segments"]
     async def send_group_msg(self, group_id, message) -> Optional[int]
 
     # 管理操作 → 记录并返回 True
@@ -66,6 +67,8 @@ class DebugManager:
     def from_config(cls, cfg: dict, data_dir="data/test") -> "DebugManager"
     async def inject_event(self, event: dict) -> DebugResult
     async def inject_message(self, group_id, user_id, raw_message, **kwargs) -> DebugResult
+    # kwargs: sender_card / at_list / message_id；at_list 会拼进 raw_message
+    # 并同步生成 message 段数组
     async def inject_notice(self, notice_type, group_id, user_id, **kwargs) -> DebugResult
     async def inject_request(self, request_type, sub_type, group_id, user_id, **kwargs) -> DebugResult
     def set_super_admins(self, admins: set[str])

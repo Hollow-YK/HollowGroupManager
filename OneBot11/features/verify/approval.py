@@ -10,6 +10,8 @@ import re
 import time
 from typing import Optional, List, TYPE_CHECKING
 
+from core.message import at_segment, text_segment, to_plain_text
+
 from .models import ApprovalConfig, ApprovalGroupConfig
 
 if TYPE_CHECKING:
@@ -356,10 +358,16 @@ class ApprovalModule:
         if not acfg or not acfg.welcome_text:
             return
 
-        # 替换占位符后发送
-        text = acfg.welcome_text.replace("{@新成员}", f"[CQ:at,qq={user_id}]")
+        # 按 {@新成员} 拆分，插入真正的 at 段（写 `[CQ:at,..]` 只是字面量）
+        segments: list[dict] = []
+        for i, part in enumerate(acfg.welcome_text.split("{@新成员}")):
+            if i > 0:
+                segments.append(at_segment(user_id))
+            if part:
+                segments.append(text_segment(part))
+
         try:
-            await self.d.send_message(int(group_id), text)
+            await self.d.send_message(int(group_id), segments)
             logger.info(f"已发送入群欢迎: group={group_id} user={user_id}")
         except Exception:
             logger.exception("发送入群欢迎失败")
@@ -370,7 +378,7 @@ class ApprovalModule:
         user_id = event.get("user_id", 0)
         sub_type = event.get("sub_type", "add")
         flag = event.get("flag", "")
-        comment = event.get("comment", "")
+        comment = to_plain_text(event.get("comment", ""))
 
         if not group_id or not user_id or not flag:
             return

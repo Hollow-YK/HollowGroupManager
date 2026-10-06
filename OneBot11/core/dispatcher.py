@@ -8,8 +8,15 @@ import time
 import logging
 from typing import Optional, List, Callable, Awaitable, TYPE_CHECKING
 
-from .models import ConfigInfo, ConfigState, CommandItem, CommandConfig, PunishRecord, BlacklistItem
+from .models import ConfigState, CommandItem, CommandConfig, PunishRecord, BlacklistItem
 from .data_manager import DataManager
+from .message import (
+    get_at_list,
+    image_segment,
+    message_from_event,
+    to_readable_string,
+    to_segments,
+)
 
 if TYPE_CHECKING:
     from bot.api import OneBotAPI
@@ -17,7 +24,9 @@ if TYPE_CHECKING:
 logger = logging.getLogger("Hollow.Cmd")
 
 # 统一处理器签名
-CmdHandler = Callable[[int, str, str, list, list, str], Awaitable[Optional[str]]]
+# 返回 str = 纯文本回复（自动转 text 段）；返回 list[dict] = 消息段数组
+CmdHandler = Callable[[int, str, str, list, list, str],
+                      Awaitable[Optional[str | list[dict]]]]
 EventListener = Callable[[dict], Awaitable[None]]
 
 
@@ -83,11 +92,13 @@ class CommandDispatcher:
 
     async def send_message(self, group_id: int,
                            message: str | list[dict]) -> bool:
-        """发送群聊消息。str 自动转 text 段，list 直接作为消息段数组发送。"""
+        """发送群聊消息。
+
+        - `str`：视为**纯文本**，自动包成单个 text 段（字面量，CQ 安全）。
+        - `list[dict]`：段数组，直接下发（需要 at / 图片等 CQ 能力时用）。
+        """
         if isinstance(message, str):
-            if not message:
-                return True
-            message = [{"type": "text", "data": {"text": message}}]
+            message = to_segments(message)
         if not message:
             return True
         return await self._api.send_group_msg(group_id, message)
@@ -96,9 +107,7 @@ class CommandDispatcher:
         """发送图片消息（base64 编码，OneBot v11 数组格式 image 段）。"""
         import base64
         return await self.send_message(group_id, [
-            {"type": "image", "data": {
-                "file": f"base64://{base64.b64encode(png_bytes).decode()}"
-            }}
+            image_segment(f"base64://{base64.b64encode(png_bytes).decode()}")
         ])
 
     def _render_png(self, maker) -> Optional[bytes]:
@@ -389,7 +398,9 @@ class CommandDispatcher:
         if event.get("message_type") != "group":
             return None
 
-        raw = event.get("raw_message", event.get("message", "")).strip()
+        # 消息统一归一为段数组：文本与 CQ 码分离，转义在边界处理一次
+        message = message_from_event(event)
+        raw = to_readable_string(message).strip()
         group_id = str(event.get("group_id", ""))
         sender_id = str(event.get("user_id", ""))
 
@@ -415,8 +426,8 @@ class CommandDispatcher:
             return None
         ext_cmd = parts[0].lower()
 
-        # 提取 at 列表
-        at_list = self._extract_at(event)
+        # 提取 at 列表（直接从段数组取，不再扫描文本）
+        at_list = get_at_list(message)
 
         # 解析外部名 → 内部名
         internal = self._cmd_map.get(ext_cmd)
@@ -484,14 +495,8 @@ class CommandDispatcher:
 
     @staticmethod
     def _extract_at(event: dict) -> List[str]:
-        """从消息中提取 @QQ 列表"""
-        ats = []
-        raw = event.get("raw_message", event.get("message", ""))
-        for m in re.finditer(r'\[CQ:at,qq=(\d+)\]', str(raw)):
-            qq = m.group(1)
-            if qq and qq != "0":
-                ats.append(qq)
-        return ats
+        """从消息中提取 @QQ 列表（段数组优先，兼容 CQ 字符串）"""
+        return get_at_list(message_from_event(event))
 
     @staticmethod
     def _extract_qq(text: str) -> Optional[str]:
