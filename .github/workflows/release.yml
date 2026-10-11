@@ -9,7 +9,7 @@ permissions:
   contents: write
 
 env:
-  # 版本目录列表（硬编码），Extract update logs 会遍历这些目录
+  # 版本目录列表（硬编码），手写存档步骤会遍历这些目录
   EDITIONS: 'QFun OneBot11'
 
 jobs:
@@ -34,30 +34,7 @@ jobs:
             echo "prerelease=false" >> $GITHUB_OUTPUT
           fi
 
-      - name: Extract update logs from history.txt
-        run: |
-          VERSION="V${{ steps.meta.outputs.version }}"
-          > /tmp/update_log.md
-
-          for edition in $EDITIONS; do
-            if [ -f "${edition}/history.txt" ]; then
-              echo "## ${edition} 更新日志" >> /tmp/update_log.md
-              echo "" >> /tmp/update_log.md
-
-              awk -v ver="${VERSION}" '
-                $0 ~ "^" ver "[ (]" { found=1; next }
-                found && /^V[0-9]/       { exit }
-                found && /^---/          { next }
-                found                    { sub(/^▸ /, "- "); print }
-              ' "${edition}/history.txt" >> /tmp/update_log.md
-
-              echo "" >> /tmp/update_log.md
-            fi
-          done
-
-          echo "Extracted update log:"
-          cat /tmp/update_log.md || echo "(empty)"
-
+      # ── 更新记录：由约定式提交（Conventional Commits）自动生成 ──
       - name: Generate changelog with git-cliff
         uses: orhun/git-cliff-action@v4
         with:
@@ -68,34 +45,42 @@ jobs:
         env:
           OUTPUT: CHANGES.md
           GITHUB_REPO: ${{ github.repository }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # ── 手写历史存档（history.txt）：降级为补充，无对应版本段落时自动省略 ──
+      - name: Extract legacy notes from history.txt
+        run: |
+          VERSION="V${{ steps.meta.outputs.version }}"
+          : > /tmp/legacy_notes.md
+
+          for edition in $EDITIONS; do
+            [ -f "${edition}/history.txt" ] || continue
+
+            section=$(awk -v ver="${VERSION}" '
+              $0 ~ "^" ver "[ (]" { found=1; next }
+              found && /^V[0-9]/       { exit }
+              found && /^---/          { next }
+              found                    { sub(/^▸ /, "- "); print }
+            ' "${edition}/history.txt")
+
+            if [ -n "$section" ]; then
+              echo "### ${edition}" >> /tmp/legacy_notes.md
+              echo "" >> /tmp/legacy_notes.md
+              printf '%s\n\n' "$section" >> /tmp/legacy_notes.md
+            fi
+          done
+
+          echo "Extracted legacy notes:"
+          cat /tmp/legacy_notes.md
 
       - name: Compose final release body
         run: |
           {
-            HAS_UPDATE_LOG=false
-
-            # PRIMARY: history.txt 提取的更新日志
-            if [ -s /tmp/update_log.md ]; then
-              HAS_UPDATE_LOG=true
-              echo "## 更新日志"
-              echo ""
-              cat /tmp/update_log.md
-              echo ""
-              echo "---"
-              echo ""
-            fi
-
-            # git-cliff / fallback — 有 update_log 时折叠到 <details> 里
-            if $HAS_UPDATE_LOG; then
-              echo '<details>'
-              echo '<summary>📋 提交记录</summary>'
-              echo ""
-            fi
-
+            # PRIMARY: 约定式提交生成的 changelog
             if [ -s CHANGES.md ]; then
               cat CHANGES.md
             else
-              # FALLBACK: git-cliff 失败时回退到 git log
+              # FALLBACK: git-cliff 失败或为空时回退到 git log
               PREV_TAG=$(git tag --sort=-v:refname | sed -n "/^${{ github.ref_name }}$/{n;p}")
               echo "## ${{ steps.meta.outputs.version }} ($(date +%Y-%m-%d))"
               echo ""
@@ -106,9 +91,16 @@ jobs:
               fi
             fi
 
-            if $HAS_UPDATE_LOG; then
+            # SUPPLEMENTARY: 手写历史存档，折叠显示
+            if [ -s /tmp/legacy_notes.md ]; then
               echo ""
-              echo '</details>'
+              echo "---"
+              echo ""
+              echo "<details>"
+              echo "<summary>📜 历史手写记录</summary>"
+              echo ""
+              cat /tmp/legacy_notes.md
+              echo "</details>"
             fi
           } > /tmp/release_body.md
 
