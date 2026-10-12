@@ -196,13 +196,40 @@ QQ消息 → 框架/协议层 → 消息处理器
 发布通过 Git tag 触发（`.github/workflows/release.yml`）：
 
 1. 推送 `v*` 格式的 tag（如 `v1.0.5`）
-2. CI 自动构建两个发行包：
+2. 由 **约定式提交自动生成更新记录**（git-cliff + `.github/cliff.toml`）
+3. CI 自动构建两个发行包：
    - `HollowGroupManager_QFun-<version>.zip` — QFun 版（`main.java` + `config.properties` + `info.prop` + `desc.txt` + `README.md`）
    - `HollowGroupManager_OneBot11-<version>.zip` — OneBot11 版（`main.py` + `requirements.txt` + `README.md` + `LICENSE` + `bot/` + `core/` + `features/`）
-3. 从各版 `history.txt` 提取更新日志，组合 git-cliff changelog
 4. 创建 GitHub Release
 
 版本号含 `alpha`/`beta`/`rc`/`dev`/`preview` 时自动标记为预发布。
+正式版的更新记录自**上一个正式 tag** 起算，因此 beta 阶段的提交会一并计入正式版。
+
+### 更新记录生成
+
+Release 说明由 git-cliff 依据提交信息生成，因此 **commit / PR 标题请遵循 [Conventional Commits](https://www.conventionalcommits.org/)**：
+
+| 前缀 | 分组 |
+| --- | --- |
+| `feat` | ✨ 新功能 |
+| `fix` | 🐛 Bug修复 |
+| `refactor` | 🚜 代码重构 |
+| `perf` | 🚀 性能优化 |
+| `docs` | 📚 文档 |
+| `style` | 🎨 样式 |
+| `test` | 🧪 测试 |
+| `chore` | 🔧 日常维护 |
+| `ci` | ⚙️ 持续集成 |
+| `revert` | ◀️ 撤销 |
+
+- 历史提交多为中文描述，`.github/cliff.toml` 内置中文前缀兜底（`修复` / `新增` / `文档` …），旧提交同样能归类；未匹配的归入「📦 其他」。
+- 合并 PR 时以 **PR 标题**为准（`[git.github] commits = true`），故 PR 标题也建议写成约定式格式。
+- 提交信息含 `[skip changelog]` 时不进入更新记录。
+- 本地预览：`git cliff -c .github/cliff.toml --unreleased`
+
+各版 `history.txt` 是**手写历史存档**，发版时若存在对应版本段落，会折叠到 Release 说明末尾的 `<details>` 中；不再更新也不影响发布。
+
+> 仓库根目录的 `cliff.toml`（基于 PR label、且 TOML 语法有误）未被 CI 使用。
 
 ## 测试
 
